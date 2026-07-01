@@ -221,25 +221,46 @@ module Logic
         result = HomotopyContinuation.solve(C, show_progress=false)
         real_results_scaled = real_solutions(result)
 
+        if isempty(real_results_scaled)
+            error("No real HC solution found for SIR.")
+        end
+
+        RSS_before = [get_RSS(I_data, I_hat(r, B...)) for r in real_results_scaled]
+        idx_best_before = argmin(RSS_before)
+        best_result_scaled_beforeLS = real_results_scaled[idx_best_before]
+
         lb_scaled = to_scaled(Value.lb, T)
         ub_scaled = to_scaled(Value.ub, T)
 
         final_results_scaled = Vector{Float64}[]
+        RSS_after = Float64[]
 
         for r in real_results_scaled
             bound_r = min.(max.(r, lb_scaled), ub_scaled)
             fit = curve_fit(model, t_scaled, I_data, bound_r, lower=lb_scaled, upper=ub_scaled)
             push!(final_results_scaled, fit.param)
+            push!(RSS_after, get_RSS(I_data, I_hat(fit.param, B...)))
         end
 
         if isempty(final_results_scaled)
             error("No real HC solution found for SIR.")
         end
 
-        best_result_scaled, RSS_Ihat_Idata = best_solution(final_results_scaled, I_data, B...)
+        idx_best_after = argmin(RSS_after)
+        ideal_best_result_scaled = final_results_scaled[idx_best_before]
+        best_result_scaled = final_results_scaled[idx_best_after]
+        RSS_Ihat_Idata = get_RSS(I_data, I_hat(best_result_scaled, B...))
+
+        if idx_best_before != idx_best_after
+            printstyled("Best result before and after LS mismatch", color = :red)
+            println("Best result before LS: ", best_result_scaled_beforeLS)
+            println("Best result before LS after LS: ", ideal_best_result_scaled)
+            println("Best result after LS: ", best_result_scaled)
+        end
+
         best_result = to_physical(best_result_scaled, T)
         parameter_err = get_param_error(best_result, true_vals)
-        if I != nothing
+        if I !== nothing
             RSS_Idata_I = get_RSS(I_data, I)
         else
             RSS_Idata_I = nothing
@@ -258,7 +279,7 @@ module Logic
 
     function print_HC_LS(results::NamedTuple)
 
-        println("=== HC_LS SIR Results ===")
+        printstyled("=== HC_LS SIR Results ===\n", color = :magenta, bold = true)
         println("Method used: ", results.method)
 
         println("\nBest parameter estimates:")

@@ -139,15 +139,129 @@ module Integrate
     end
 
 
-    function integrate(t::Vector, y::Vector, method::String)
+    using QuadGK
+    """
+    quadgk(f, a,b,c...; rtol=sqrt(eps), atol=0, maxevals=10^7, order=7, norm=norm, segbuf=nothing, eval_segbuf=nothing)
+
+    The algorithm is an adaptive Gauss-Kronrod integration technique:
+    the integral in each interval is estimated using a Kronrod rule (2*order+1 points)
+    and the error is estimated using an embedded Gauss rule (order points).
+    The interval with the largest error is then subdivided into two intervals and the process is repeated until the desired error tolerance is achieved.
+    """
+
+    function quadratic_lagrange_integral(
+        measure::Function,
+        a, b,
+        x0,
+        x1,
+        x2,
+        y0,
+        y1,
+        y2,
+        rtol
+    )
+        """
+        given x, y, measure
+        return ∫ from x0 to x2 of measure * y wrt x
+        """
+
+        if x0 == x1 || x0 == x2 || x1 == x2
+            error("Interpolation nodes must be distinct")
+        end
+
+        # Here based on the Lagrange interpolation formula for approximating y (first part of Simpson method)
+        # L = y0*l0 + y1*l1 + y2*l2 the approximation of f
+        l0(x) = ((x - x1) * (x - x2)) / ((x0 - x1) * (x0 - x2))
+        l1(x) = ((x - x0) * (x - x2)) / ((x1 - x0) * (x1 - x2))
+        l2(x) = ((x - x0) * (x - x1)) / ((x2 - x0) * (x2 - x1))
+
+        # So target integration is
+        # ∫ [y0*l0 + y1*l1 + y2*l2] * measure
+        # y0 * ∫ l0*measure + y1 * ∫ l1*measure + y2 * ∫ l2*measure
+        # Since now l * measure is no longer the quadratic function approximated in original Simpson method, we cannot directly apply the formula?
+
+        A0, _ = quadgk(x -> l0(x) * measure(x), a, b; rtol=rtol)
+        A1, _ = quadgk(x -> l1(x) * measure(x), a, b; rtol=rtol)
+        A2, _ = quadgk(x -> l2(x) * measure(x), a, b; rtol=rtol)
+
+        return A0 * y0 + A1 * y1 + A2 * y2
+    end
+
+
+    function cumintegrate_improved(x::AbstractVector, y::AbstractVector, measure::Function, rtol)::Float64
+        """
+        compute the integration of measure * y wrt x
+        since for now we only need the integrating value on the full interval x, only compute that value
+        """
+        n = length(x)
+
+        if n == 1
+            error("cumintegrate requires at least 2 points")
+        end
+
+        if n == 2
+            x0 = x[1]
+            x1 = x[2]
+            y0 = y[1]
+            y1 = y[2]
+
+            l0(x) = (x - x1) / (x0 - x1)
+            l1(x) = (x - x0) / (x1 - x0)
+
+            A0, _ = quadgk(x -> l0(x) * measure(x), x0, x1; rtol=rtol)
+            A1, _ = quadgk(x -> l1(x) * measure(x), x0, x1; rtol=rtol)
+
+            return A0 * y0 + A1 * y1
+        end
+
+        total = 0.0
+
+        # Use quadratic blocks
+        # (x1,x2,x3), then (x3,x4,x5), then (x5,x6,x7), ...
+        last_full_point = isodd(n) ? n : n - 1
+
+        for i in 1:2:(last_full_point - 2)
+            total += quadratic_lagrange_integral(
+                measure,
+                x[i], x[i+2],
+                x[i], x[i+1], x[i+2],
+                y[i], y[i+1], y[i+2],
+                rtol
+            )
+        end
+
+        # If n is even, one last interval remains
+        # we approximate y using the last three points, but integrate only from x[n-1] to x[n]
+        if iseven(n)
+            total += quadratic_lagrange_integral(
+                measure,
+                x[n-1], x[n],
+                x[n-2], x[n-1], x[n],
+                y[n-2], y[n-1], y[n],
+                rtol
+            )
+        end
+
+        return total
+    end
+
+
+    function integrate(t::Vector, y::Vector, method::String; measure::Union{Function, Nothing}=nothing, rtol=1e-10)
         if method == "T"
             return cumul_integrate(t, y)
         elseif method == "S"
             return cumintegrate(t, y)
         elseif method == "S_uniform"
             return cumintegrate_simpson_uniform(t, y)
+        elseif method == "S_improved"
+            if measure === nothing
+                error("S_improved require a measure function")
+                return
+            else
+                return cumintegrate_improved(t, y, measure, rtol)
+            end
         else
-            @error "method must be T, S, or S_uniform"
+            error("method must be T, S, S_uniform, or S_improved")
         end
     end
 

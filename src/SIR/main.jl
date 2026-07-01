@@ -17,7 +17,6 @@ const variables = [α, γ, S0]
 
 
 function main()
-    Random.seed!(1234)
 
     t = collect(0.0:10.0:1000.0)
 
@@ -32,7 +31,9 @@ function main()
     results = Logic.HC_LS(t, I_data, variables, "S")
     Logic.print_HC_LS(results)
 
-    HC_LS_weak(t, I_data, variables, "S"; K=8)
+    HC_LS_weak(t, I_data, variables, "S_improved"; K=10)
+    HC_LS_weak(t, I_data, variables, "S"; K=10)
+    println()
 end
 
 main()

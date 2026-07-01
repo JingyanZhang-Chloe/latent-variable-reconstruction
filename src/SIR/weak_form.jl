@@ -19,7 +19,7 @@ using LsqFit
 using Random
 
 
-function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, method::String, K::Int)
+function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, method)
     # Since we are differentiating, maybe it is better to write in the original form
     Y  = zeros(K)   # weak left-hand side ∫ phi I'
     W1 = zeros(K)   # ∫ phi I
@@ -30,18 +30,34 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, method::St
     # ∫ phi I' = [phi I]_0^T - ∫ phi' I
     # If we ensure [phi I]_0^T = 0, then LHS = - ∫ phi' I
 
-    F = Integrate.integrate(t, I_data, method)
+    if method == "S_improved"
+        F = Integrate.integrate(t, I_data, "S")
 
-    for k in 1:K
-        phi, dphi = Measure.measure_sine(t, k)
+        for k in 1:K
+            phi, dphi = Measure.measure_sine_function(t, k)
 
-        # General weak LHS, including boundary term
-        boundary = phi[end] * I_data[end] - phi[1] * I_data[1]
-        Y[k] = boundary - Integrate.integrate(t, dphi .* I_data, method)[end]
+            # General weak LHS, including boundary term
+            boundary = phi(t[end]) * I_data[end] - phi(t[1]) * I_data[1]
+            Y[k] = boundary - Integrate.integrate(t, I_data, method; measure=dphi)
 
-        W1[k] = Integrate.integrate(t, phi .* I_data, method)[end]
-        W2[k] = Integrate.integrate(t, phi .* (I_data .^ 2), method)[end]
-        W3[k] = Integrate.integrate(t, phi .* I_data .* F, method)[end]
+            W1[k] = Integrate.integrate(t, I_data, method; measure=phi)
+            W2[k] = Integrate.integrate(t, (I_data .^ 2), method; measure=phi)
+            W3[k] = Integrate.integrate(t, I_data .* F, method; measure=phi)
+        end
+    else
+        F = Integrate.integrate(t, I_data, method)
+
+        for k in 1:K
+            phi, dphi = Measure.measure_sine(t, k)
+
+            # General weak LHS, including boundary term
+            boundary = phi[end] * I_data[end] - phi[end] * I_data[1]
+            Y[k] = boundary - Integrate.integrate(t, dphi .* I_data, method)[end]
+
+            W1[k] = Integrate.integrate(t, phi .* I_data, method)[end]
+            W2[k] = Integrate.integrate(t, phi .* (I_data .^ 2), method)[end]
+            W3[k] = Integrate.integrate(t, phi .* I_data .* F, method)[end]
+        end
     end
 
     return Y, W1, W2, W3
@@ -92,7 +108,7 @@ function HC_LS_weak(
     vars::Vector,
     method::String;
     K::Int = 8,
-    true_vals=Value.true_vals
+    true_vals=Value.true_vals,
 )
     """
     No time rescaling
@@ -100,7 +116,8 @@ function HC_LS_weak(
     Still make initial points in bounds before LS
     """
 
-    Y, W1, W2, W3 = get_weak_blocks(I_data, t, method, K)
+    Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method)
+
     I0 = I_data[1]
 
     function model(x, p)
@@ -116,11 +133,25 @@ function HC_LS_weak(
     result = HomotopyContinuation.solve(C, show_progress=false)
     real_results = real_solutions(result)
 
+    if isempty(real_results)
+        error("No real HC solution found for SIR weak form.")
+    end
+
+    RSS_before = [
+        Logic.get_RSS(Y, L_hat(r, I0, W1, W2, W3))
+        for r in real_results
+    ]
+
+    idx_best_before = argmin(RSS_before)
+    best_result_beforeLS = real_results[idx_best_before]
+
     final_results = Vector{Float64}[]
+    RSS_after = Float64[]
+    successful_HC_indices = Int[]
 
     xdata = collect(1:K)
 
-    for r in real_results
+    for (i, r) in enumerate(real_results)
         p0 = Float64.(r)
 
         # Make sure the starting point is inside the LS bounds
@@ -137,6 +168,8 @@ function HC_LS_weak(
             )
 
             push!(final_results, fit.param)
+            push!(RSS_after, Logic.get_RSS(Y, L_hat(fit.param, I0, W1, W2, W3)))
+            push!(successful_HC_indices, i)
 
         catch e
             @warn "curve_fit failed for initial point" p0 exception=e
@@ -147,10 +180,41 @@ function HC_LS_weak(
         error("No valid LS-refined solutions found.")
     end
 
-    best_result, RSS = best_solution_weak(final_results, Y, I0, W1, W2, W3)
+    idx_best_after_in_final = argmin(RSS_after)
+    idx_best_after_in_HC = successful_HC_indices[idx_best_after_in_final]
+
+    best_result = final_results[idx_best_after_in_final]
+    RSS = RSS_after[idx_best_after_in_final]
+
+    if idx_best_before in successful_HC_indices
+        pos_before_best_afterLS = findfirst(==(idx_best_before), successful_HC_indices)
+        ideal_best_result = final_results[pos_before_best_afterLS]
+
+        if idx_best_before != idx_best_after_in_HC
+            printstyled("Best result before and after LS mismatch\n", color = :red, bold = true)
+
+            println("Best HC index before LS: ", idx_best_before)
+            println("Best HC index after LS:  ", idx_best_after_in_HC)
+
+            println("\nBest result before LS:")
+            println(best_result_beforeLS)
+
+            println("\nBest-before-LS result after LS:")
+            println(ideal_best_result)
+            println("RSS after LS from before-best solution: ", RSS_after[pos_before_best_afterLS])
+
+            println("\nBest result after LS:")
+            println(best_result)
+            println("RSS after LS from after-best solution: ", RSS)
+        end
+    else
+        printstyled("Warning: the best HC solution before LS failed during LS refinement\n", color = :yellow, bold = true)
+        println("Best result before LS: ", best_result_beforeLS)
+    end
+
     parameter_err = Logic.get_param_error(best_result, true_vals)
 
-    println("=== HC_LS_weak Results ===")
+    printstyled("=== HC_LS_weak SIR Results ===\n", color = :magenta, bold = true)
     println("Method used: ", method)
     println("Number of test functions K: ", K)
 

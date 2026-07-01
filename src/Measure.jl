@@ -28,4 +28,16 @@ module Measure
         return phi, dphi
     end
 
+
+    function measure_sine_function(t::AbstractVector{<:Real}, k::Int)
+        t0 = t[1]
+        T = t[end]
+        L = T - t0
+
+        phi(s) = sin(k * π * (s - t0) / L)
+        dphi(s) = (k * π / L) * cos(k * π * (s - t0) / L)
+
+        return phi, dphi
+    end
+
 end
