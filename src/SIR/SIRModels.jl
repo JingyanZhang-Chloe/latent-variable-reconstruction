@@ -206,7 +206,7 @@ module Logic
 
 
     function HC_LS(t::Vector{Float64}, I_data::Vector{Float64}, vars::Vector, method::String; I=nothing, true_vals=Value.true_vals)
-        T, _ = select_T(I_data, t)
+        T, _ = select_T(I_data, t; method=method)
         t_scaled = t ./ T
         B = get_blocks(I_data, t_scaled, method)
 

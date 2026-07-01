@@ -51,7 +51,7 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
             phi, dphi = Measure.measure_sine(t, k)
 
             # General weak LHS, including boundary term
-            boundary = phi[end] * I_data[end] - phi[end] * I_data[1]
+            boundary = phi[end] * I_data[end] - phi[1] * I_data[1]
             Y[k] = boundary - Integrate.integrate(t, dphi .* I_data, method)[end]
 
             W1[k] = Integrate.integrate(t, phi .* I_data, method)[end]
@@ -109,6 +109,7 @@ function HC_LS_weak(
     method::String;
     K::Int = 8,
     true_vals=Value.true_vals,
+    if_print=true
 )
     """
     No time rescaling
@@ -214,17 +215,45 @@ function HC_LS_weak(
 
     parameter_err = Logic.get_param_error(best_result, true_vals)
 
-    printstyled("=== HC_LS_weak SIR Results ===\n", color = :magenta, bold = true)
-    println("Method used: ", method)
-    println("Number of test functions K: ", K)
+    if if_print
+        if method == "S_improved"
+            B = Logic.get_blocks(I_data, t, "S")
+        else
+            B = Logic.get_blocks(I_data, t, method)
+        end
+        Ihat_best = Logic.I_hat(best_result, B...)
 
-    println("\nBest parameter estimates:")
-    for (var, val) in zip(vars, best_result)
-        println(var, " = ", val)
+        printstyled("=== HC_LS_weak SIR Results ===\n", color = :magenta, bold = true)
+        println("Method used: ", method)
+        println("Number of test functions K: ", K)
+
+        println("\nBest parameter estimates:")
+        for (var, val) in zip(vars, best_result)
+            println(var, " = ", val)
+        end
+
+        println("\nResidual sum of squares (RSS_Lhat_L(Y)): ", RSS)
+        println("Residual sum of squares (RSS_Ihat_Idata): ", Logic.get_RSS(Ihat_best, I_data))
+
+        println("\nParameter error: ", parameter_err)
+
+        println("ALL real results -- #", length(real_results))
+        for r in real_results
+            println("RSS ", Logic.get_RSS(Y, L_hat(r, I0, W1, W2, W3)))
+            println("parameter error ", Logic.get_param_error(r, true_vals))
+        end
+
+        println("ALL final results -- #", length(final_results))
+        for r in final_results
+            if r == best_result
+                printstyled("best result!\n", color=:yellow)
+            end
+
+            println("RSS ", Logic.get_RSS(Y, L_hat(r, I0, W1, W2, W3)))
+            println("parameter error ", Logic.get_param_error(r, true_vals))
+        end
+
     end
-
-    println("\nResidual sum of squares (RSS_Lhat_L(Y)): ", RSS)
-    println("\nParameter error: ", parameter_err)
 
     return best_result, RSS, parameter_err
 end

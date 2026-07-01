@@ -37,10 +37,10 @@ function main()
     Logic.print_HC_LS(results)
 
     # Weak-form version
-    HC_LS_weak(t, I_data, variables, "S"; K=6, true_vals=true_vals)
+    K=4
+    HC_LS_weak(t, I_data, variables, "S_improved"; K=K, true_vals=true_vals)
+    HC_LS_weak(t, I_data, variables, "S"; K=K, true_vals=true_vals)
     println()
-
-    # NOTICE parameter error here has no meaning!!!! since it is refer to the data we manually generate
 end
 
 main()
