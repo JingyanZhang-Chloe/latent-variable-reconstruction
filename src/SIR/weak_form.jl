@@ -44,6 +44,20 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
             W2[k] = Integrate.integrate(t, (I_data .^ 2), method; measure=phi)
             W3[k] = Integrate.integrate(t, I_data .* F, method; measure=phi)
         end
+    elseif method == "S_formula_improved"
+        F = Integrate.integrate(t, I_data, "S")
+
+        for k in 1:K
+            # General weak LHS, including boundary term
+            phi, dphi = Measure.measure_sine_function(t, k)
+            boundary = phi(t[end]) * I_data[end] - phi(t[1]) * I_data[1]
+
+            Y[k] = boundary - Integrate.integrate(t, I_data, method; t=t, k=k, basis=:sin, derivative=true)
+
+            W1[k] = Integrate.integrate(t, I_data, method; t=t, k=k, basis=:sin)
+            W2[k] = Integrate.integrate(t, (I_data .^ 2), method; t=t, k=k, basis=:sin)
+            W3[k] = Integrate.integrate(t, I_data .* F, method; t=t, k=k, basis=:sin)
+        end
     else
         F = Integrate.integrate(t, I_data, method)
 
@@ -216,7 +230,7 @@ function HC_LS_weak(
     parameter_err = Logic.get_param_error(best_result, true_vals)
 
     if if_print
-        if method == "S_improved"
+        if method == "S_improved" || method == "S_formula_improved"
             B = Logic.get_blocks(I_data, t, "S")
         else
             B = Logic.get_blocks(I_data, t, method)

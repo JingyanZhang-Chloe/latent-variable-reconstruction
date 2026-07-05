@@ -188,7 +188,213 @@ module Integrate
     end
 
 
-    function cumintegrate_improved(x::AbstractVector, y::AbstractVector, measure::Function, rtol)::Float64
+    function get_coefficients(
+        x0,
+        x1,
+        x2,
+        y0,
+        y1,
+        y2
+    )
+        d0 = (x0 - x1) * (x0 - x2)
+        d1 = (x1 - x0) * (x1 - x2)
+        d2 = (x2 - x0) * (x2 - x1)
+
+        A = y0 / d0 + y1 / d1 + y2 / d2
+
+        B = -y0 * (x1 + x2) / d0 -
+            y1 * (x0 + x2) / d1 -
+            y2 * (x0 + x1) / d2
+
+        C = y0 * x1 * x2 / d0 +
+            y1 * x0 * x2 / d1 +
+            y2 * x0 * x1 / d2
+
+        return A, B, C
+    end
+
+
+    function formula_lagrange_integral_trig(
+        a, b,
+        x0, x1, x2,
+        y0, y1, y2,
+        ω,
+        t0,
+        trig::Symbol,
+        scale
+    )
+        """
+        given x, y, measure
+        return ∫ from x0 to x2 of measure * y wrt x
+        Based on anti derivative formulas
+
+        Here our measure function supports sine and cosine
+        scale is for if we have derivative dphi, we will have:
+        - for sine: cosine with ω
+        - for cosine: sine with -ω
+        """
+        if x0 == x1 || x0 == x2 || x1 == x2
+            error("Interpolation nodes must be distinct")
+        end
+
+        # Here based on the Lagrange interpolation formula for approximating y (first part of Simpson method)
+        # L = y0*l0 + y1*l1 + y2*l2 the approximation of f
+
+        # So the approximating of f is
+        # [y0*l0 + y1*l1 + y2*l2]
+        # This is a quadratic equation with order 2
+        # We write y0*l0 + y1*l1 + y2*l2 in the form Ax^2 + Bx + C
+
+        z0 = x0 - t0
+        z1 = x1 - t0
+        z2 = x2 - t0
+
+        A, B, C = get_coefficients(z0, z1, z2, y0, y1, y2)
+
+        # Then target integration ∫ [Ax^2 + Bx + C] * measure
+        # Since phi(x) = sin(k * π * (x - t0) / L)
+        # We will need to know ω = k * π / L and t0
+
+        # Based on the latex section 2.3.2
+        function F(z)
+            if trig === :sin
+                return A * (
+                    -(z^2 * cos(ω * z)) / ω +
+                    (2 * z * sin(ω * z)) / ω^2 +
+                    (2 * cos(ω * z)) / ω^3
+                ) +
+                B * (
+                    -(z * cos(ω * z)) / ω +
+                    sin(ω * z) / ω^2
+                ) -
+                C * cos(ω * z) / ω
+
+            elseif trig === :cos
+                return A * (
+                    (z^2 * sin(ω * z)) / ω +
+                    (2 * z * cos(ω * z)) / ω^2 -
+                    (2 * sin(ω * z)) / ω^3
+                ) +
+                B * (
+                    (z * sin(ω * z)) / ω +
+                    cos(ω * z) / ω^2
+                ) +
+                C * sin(ω * z) / ω
+
+            else
+                error("trig must be :sin or :cos")
+            end
+        end
+
+        return scale * (F(b - t0) - F(a - t0))
+    end
+
+
+    function cumintegrate_improved(x::AbstractVector, y::AbstractVector, k::Int, t::Vector{Float64}, measure::Symbol, derivative::Bool)::Float64
+        """
+        compute the integration of measure * y wrt x
+        since for now we only need the integrating value on the full interval x, only compute that value
+        """
+        n = length(x)
+        t0 = t[1]
+        T = t[end]
+        L = T - t0
+
+        ω = k * π / L
+
+        if derivative
+            if measure === :sin
+                trig = :cos
+                scale = ω
+            elseif measure === :cos
+                trig = :sin
+                scale = -ω
+            else
+                error("measure must be :sin or :cos")
+            end
+        else
+            trig = measure
+            scale = 1.0
+        end
+
+        if n == 1
+            error("cumintegrate requires at least 2 points")
+        end
+
+        if n == 2
+            x0 = x[1]
+            x1 = x[2]
+            y0 = y[1]
+            y1 = y[2]
+
+            if x0 == x1
+                error("Interpolation nodes must be distinct")
+            end
+
+            z0 = x0 - t0
+            z1 = x1 - t0
+
+            # P(z) = A*z + B
+            A = (y1 - y0) / (z1 - z0)
+            B = (y0 * z1 - y1 * z0) / (z1 - z0)
+
+            # A * ∫z*sin*(ωz) + B * ∫sin*(ωz)
+            function F(z)
+                if trig === :sin
+                    return A * (
+                        -(z * cos(ω * z)) / ω +
+                        sin(ω * z) / ω^2
+                    ) -
+                    B * cos(ω * z) / ω
+
+                elseif trig === :cos
+                    return A * (
+                        (z * sin(ω * z)) / ω +
+                        cos(ω * z) / ω^2
+                    ) +
+                    B * sin(ω * z) / ω
+
+                else
+                    error("trig must be :sin or :cos")
+                end
+            end
+
+            return scale * (F(x1 - t0) - F(x0 - t0))
+        end
+
+        total = 0.0
+
+        # Use quadratic blocks
+        # (x1,x2,x3), then (x3,x4,x5), then (x5,x6,x7), ...
+        last_full_point = isodd(n) ? n : n - 1
+
+        for i in 1:2:(last_full_point - 2)
+            total += formula_lagrange_integral_trig(
+                x[i], x[i+2],
+                x[i], x[i+1], x[i+2],
+                y[i], y[i+1], y[i+2],
+                ω, t0,
+                trig, scale
+            )
+        end
+
+        # If n is even, one last interval remains
+        # we approximate y using the last three points, but integrate only from x[n-1] to x[n]
+        if iseven(n)
+            total += formula_lagrange_integral_sine(
+                x[n-1], x[n],
+                x[n-2], x[n-1], x[n],
+                y[n-2], y[n-1], y[n],
+                ω, t0,
+                trig, scale
+            )
+        end
+
+        return total
+    end
+
+
+    function _cumintegrate_improved(x::AbstractVector, y::AbstractVector, measure::Function, rtol)::Float64
         """
         compute the integration of measure * y wrt x
         since for now we only need the integrating value on the full interval x, only compute that value
@@ -246,20 +452,47 @@ module Integrate
     end
 
 
-    function integrate(t::Vector, y::Vector, method::String; measure::Union{Function, Nothing}=nothing, rtol=1e-10)
+    function integrate(
+        x::Vector, y::Vector, method::String;
+        measure::Union{Function, Nothing}=nothing,
+        rtol=1e-10,
+        t::Union{Vector{Float64}, Nothing}=nothing,
+        k::Union{Int, Nothing}=nothing,
+        basis::Union{Symbol, Nothing}=:sin,
+        derivative::Union{Bool, Nothing}=false
+    )
+
         if method == "T"
-            return cumul_integrate(t, y)
+            return cumul_integrate(x, y)
         elseif method == "S"
-            return cumintegrate(t, y)
+            return cumintegrate(x, y)
         elseif method == "S_uniform"
-            return cumintegrate_simpson_uniform(t, y)
+            return cumintegrate_simpson_uniform(x, y)
         elseif method == "S_improved"
+            """
+            Using QuadGK
+            """
             if measure === nothing
                 error("S_improved require a measure function")
                 return
             else
-                return cumintegrate_improved(t, y, measure, rtol)
+                return _cumintegrate_improved(x, y, measure, rtol)
             end
+        elseif method == "S_formula_improved"
+            """
+            Using formula for anti-derivative
+            """
+            if t === nothing
+                error("S_formula_improved require t")
+                return
+            end
+
+            if k === nothing
+                error("S_formula_improved require k")
+                return
+            end
+
+            return cumintegrate_improved(x, y, k, t, basis, derivative)
         else
             error("method must be T, S, S_uniform, or S_improved")
         end

@@ -77,8 +77,9 @@ function main()
     Logic.print_HC_LS(results)
 
     K = 12
-    HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
     HC_LS_weak(t, I_data, variables, "S"; K=K)
+    HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
+    HC_LS_weak(t, I_data, variables, "S_formula_improved"; K=K)
     println()
 
     # results = stability_test(n_trials=20, K=8, noise=0.01)

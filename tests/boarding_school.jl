@@ -38,8 +38,9 @@ function main()
 
     # Weak-form version
     K=4
-    HC_LS_weak(t, I_data, variables, "S_improved"; K=K, true_vals=true_vals)
     HC_LS_weak(t, I_data, variables, "S"; K=K, true_vals=true_vals)
+    HC_LS_weak(t, I_data, variables, "S_improved"; K=K, true_vals=true_vals)
+    HC_LS_weak(t, I_data, variables, "S_formula_improved"; K=K, true_vals=true_vals)
     println()
 end
 
