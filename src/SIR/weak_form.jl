@@ -17,6 +17,8 @@ using .Measure
 using HomotopyContinuation
 using LsqFit
 using Random
+using Printf
+using LinearAlgebra
 
 
 function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, method)
@@ -78,6 +80,188 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
 end
 
 
+function get_W3_IntByParts(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, method)
+    W3_parts = zeros(K)
+
+    if method == "S_improved"
+        F = Integrate.integrate(t, I_data, "S")
+
+        for k in 1:K
+            phi, dphi = Measure.measure_sine_function(t, k)
+            boundary = phi(t[end]) * F[end]^2 - phi(t[1]) * F[1]^2
+            W3_parts[k] = 0.5 * boundary - 0.5 * Integrate.integrate(t, F.^2, method; measure=dphi)
+        end
+
+    elseif method == "S_formula_improved"
+        F = Integrate.integrate(t, I_data, "S")
+
+        for k in 1:K
+            phi, dphi = Measure.measure_sine_function(t, k)
+            boundary = phi(t[end]) * F[end]^2 - phi(t[1]) * F[1]^2
+            W3_parts[k] = 0.5 * boundary - 0.5 * Integrate.integrate(t, F.^2, method; t=t, k=k, basis=:sin, derivative=true)
+        end
+
+    else
+        F = Integrate.integrate(t, I_data, method)
+
+        for k in 1:K
+            phi, dphi = Measure.measure_sine(t, k)
+            boundary = phi[end] * F[end]^2 - phi[1] * F[1]^2
+            W3_parts[k] = 0.5 * boundary - 0.5 * Integrate.integrate(t, dphi .* F.^2, method)[end]
+        end
+    end
+
+    return W3_parts
+end
+
+
+function weak_block_analysis(
+    I_data::Vector{Float64},
+    t::Vector{Float64},
+    K::Int,
+    method_list::Vector{String}
+)
+    a = t[1]
+    b = t[end]
+    L = b - a
+
+    for method in method_list
+        println()
+        println("-------------------------------------")
+        println("method = ", method)
+
+        # Original weak blocks
+        Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method)
+        W3_parts = get_W3_IntByParts(I_data, t, K, method)
+
+        println()
+        println("Signed block values, with W3 by parts:")
+        @printf("%4s %16s %16s %16s %16s %16s %16s\n",
+                "k", "Y[k]", "W1[k]", "W2[k]", "W3 direct", "W3 parts", "diff")
+
+        for k in 1:K
+            diff = W3[k] - W3_parts[k]
+
+            @printf("%4d %16.6e %16.6e %16.6e %16.6e %16.6e %16.6e\n",
+                    k, Y[k], W1[k], W2[k], W3[k], W3_parts[k], diff)
+        end
+
+        println()
+        println("Absolute block sizes using W3 by parts:")
+        @printf("%4s %16s %16s %16s %16s %16s\n",
+                "k", "|Y|", "|W1|", "|W2|", "|W3 parts|", "row norm")
+
+        row_norms = zeros(K)
+
+        for k in 1:K
+            row_norms[k] = sqrt(Y[k]^2 + W1[k]^2 + W2[k]^2 + W3_parts[k]^2)
+
+            @printf("%4d %16.6e %16.6e %16.6e %16.6e %16.6e\n",
+                    k,
+                    abs(Y[k]),
+                    abs(W1[k]),
+                    abs(W2[k]),
+                    abs(W3_parts[k]),
+                    row_norms[k])
+        end
+
+        println()
+        println("Summary using W3 by parts:")
+
+        min_norm = minimum(row_norms)
+        max_norm = maximum(row_norms)
+
+        println("min row norm      = ", min_norm)
+        println("max row norm      = ", max_norm)
+
+        if min_norm > 0
+            println("max/min row norm  = ", max_norm / min_norm)
+        else
+            println("max/min row norm  = Inf because min row norm is 0")
+        end
+
+        A_parts = hcat(W1, W2, W3_parts)
+
+        if K >= 3
+            println("condition number of [W1 W2 W3_parts] = ", cond(A_parts))
+        else
+            println("condition number skipped because K < 3")
+        end
+    end
+end
+
+
+
+function _weak_block_analysis(
+    I_data::Vector{Float64},
+    t::Vector{Float64},
+    K::Int,
+    method_list::Vector{String}
+)
+    println("======================================")
+    println("Weak block analysis")
+    println("K = ", K)
+    println("======================================")
+    for method in method_list
+        println()
+        println("-------------------------------------")
+        printstyled("method = ", method, color=:yellow, bold=true)
+        println()
+
+        Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method)
+
+        # ------------------------------------------------------------
+        # Table 1: actual signed block values
+        # ------------------------------------------------------------
+        println()
+        println("Signed block values:")
+        @printf("%4s %16s %16s %16s %16s\n",
+                "k", "Y[k]", "W1[k]", "W2[k]", "W3[k]")
+
+        for k in 1:K
+            @printf("%4d %16.6e %16.6e %16.6e %16.6e\n",
+                    k, Y[k], W1[k], W2[k], W3[k])
+        end
+
+        # ------------------------------------------------------------
+        # Table 1: row norms and cond value
+        # ------------------------------------------------------------
+        println()
+        @printf("%4s %14s %14s %14s %14s %14s\n",
+                "k", "|Y|", "|W1|", "|W2|", "|W3|", "row norm")
+
+        row_norms = zeros(K)
+
+        for k in 1:K
+            row_norms[k] = sqrt(Y[k]^2 + W1[k]^2 + W2[k]^2 + W3[k]^2)
+
+            @printf("%4d %14.4e %14.4e %14.4e %14.4e %14.4e\n",
+                    k,
+                    abs(Y[k]),
+                    abs(W1[k]),
+                    abs(W2[k]),
+                    abs(W3[k]),
+                    row_norms[k])
+        end
+
+        println()
+        println("Summary:")
+        println("min row norm = ", minimum(row_norms))
+        println("max row norm = ", maximum(row_norms))
+        println("max/min row norm = ", maximum(row_norms) / minimum(row_norms))
+
+        A = hcat(W1, W2, W3)
+
+        if K >= 3
+            println("condition number of [W1 W2 W3] = ", cond(A))
+        else
+            println("condition number skipped because K < 3")
+        end
+    end
+end
+
+
+
 function L_hat(paras, I0, W1, W2, W3)
     """
     Vector of length K, containing the RHS of the weak equation.
@@ -116,7 +300,233 @@ function best_solution_weak(solution_list::Vector{Vector{Float64}}, Y::Vector, I
 end
 
 
+function select_T_weak(
+    I_data::Vector{Float64},
+    t::Vector{Float64},
+    K::Int,
+    method::String;
+    m_min::Int = -6,
+    m_max::Int = 6,
+)
+    Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method)
+
+    s = [
+        norm(Y),
+        norm(W1),
+        norm(W2),
+        norm(W3),
+    ]
+
+    powers = [0, 1, 1, 2]
+
+    best_m = nothing
+    best_score = Inf
+
+    for m in m_min:m_max
+        T = 10.0^m
+
+        scaled = [s[j] / (T^powers[j]) for j in eachindex(s)]
+
+        logs = log10.(scaled .+ eps())
+        score = var(logs)
+
+        if score < best_score
+            best_score = score
+            best_m = m
+        end
+    end
+
+    best_T = 10.0^best_m
+    final_scaled = [s[j] / (best_T^powers[j]) for j in eachindex(s)]
+
+    return best_T, final_scaled
+end
+
+
 function HC_LS_weak(
+    t::Vector{Float64},
+    I_data::Vector{Float64},
+    vars::Vector,
+    method::String;
+    K::Int = 8,
+    true_vals=Value.true_vals,
+    if_print=true
+)
+    """
+    YES time rescaling
+    No complicated projection to bounds after HC
+    Still make initial points in bounds before LS
+    """
+    T, _ = select_T_weak(I_data, t, K, method)
+    t_scaled = t ./ T
+    Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method)
+
+    I0 = I_data[1]
+
+    function model(x, p)
+        return L_hat(p, I0, W1, W2, W3)
+    end
+
+    Lhat = L_hat(vars, I0, W1, W2, W3)
+    J = sum((Lhat .- Y) .^ 2)
+
+    system_eqs = differentiate(J, vars)
+    C = System(system_eqs, variables=vars)
+
+    result = HomotopyContinuation.solve(C, show_progress=false)
+    real_results = real_solutions(result)
+
+    if isempty(real_results)
+        error("No real HC solution found for SIR weak form.")
+    end
+
+    RSS_before = [
+        Logic.get_RSS(Y, L_hat(r, I0, W1, W2, W3))
+        for r in real_results
+    ]
+
+    idx_best_before = argmin(RSS_before)
+    best_result_beforeLS = real_results[idx_best_before]
+
+    final_results_scaled = Vector{Float64}[]
+    RSS_after = Float64[]
+    successful_HC_indices = Int[]
+
+    xdata = collect(1:K)
+    lb_scaled = Logic.to_scaled(Value.lb, T)
+    ub_scaled = Logic.to_scaled(Value.ub, T)
+
+    for (i, r) in enumerate(real_results)
+        p0 = Float64.(r)
+
+        # Make sure the starting point is inside the LS bounds
+        p0 = min.(max.(p0, lb_scaled), ub_scaled)
+
+        try
+            fit = curve_fit(
+                model,
+                xdata,
+                Y,
+                p0;
+                lower = lb_scaled,
+                upper = ub_scaled
+            )
+
+            push!(final_results_scaled, fit.param)
+            push!(RSS_after, Logic.get_RSS(Y, L_hat(fit.param, I0, W1, W2, W3)))
+            push!(successful_HC_indices, i)
+
+        catch e
+            @warn "curve_fit failed for initial point" p0 exception=e
+        end
+    end
+
+    if isempty(final_results_scaled)
+        error("No valid LS-refined solutions found.")
+    end
+
+    idx_best_after_in_final = argmin(RSS_after)
+    idx_best_after_in_HC = successful_HC_indices[idx_best_after_in_final]
+
+    best_result_scaled = final_results_scaled[idx_best_after_in_final]
+    best_result = Logic.to_physical(best_result_scaled, T)
+    RSS = RSS_after[idx_best_after_in_final]
+
+    if idx_best_before in successful_HC_indices
+        pos_before_best_afterLS = findfirst(==(idx_best_before), successful_HC_indices)
+        ideal_best_result = final_results_scaled[pos_before_best_afterLS]
+
+        if idx_best_before != idx_best_after_in_HC
+            printstyled("Best result before and after LS mismatch\n", color = :red, bold = true)
+
+            println("Best HC index before LS: ", idx_best_before)
+            println("Best HC index after LS:  ", idx_best_after_in_HC)
+
+            println("\nBest result before LS:")
+            println(best_result_beforeLS)
+
+            println("\nBest-before-LS result after LS:")
+            println(ideal_best_result)
+            println("RSS after LS from before-best solution: ", RSS_after[pos_before_best_afterLS])
+
+            println("\nBest result after LS:")
+            println(best_result_scaled)
+            println("RSS after LS from after-best solution: ", RSS)
+        end
+    else
+        printstyled("Warning: the best HC solution before LS failed during LS refinement\n", color = :yellow, bold = true)
+        println("Best result before LS: ", best_result_beforeLS)
+    end
+
+    parameter_err = Logic.get_param_error(best_result, true_vals)
+
+    if if_print
+        if method == "S_improved" || method == "S_formula_improved"
+            B = Logic.get_blocks(I_data, t_scaled, "S")
+        else
+            B = Logic.get_blocks(I_data, t_scaled, method)
+        end
+        Ihat_best = Logic.I_hat(best_result_scaled, B...)
+
+        printstyled("=== HC_LS_weak SIR Results ===\n", color = :magenta, bold = true)
+        println("Selected time rescale factor: ", T)
+        println("Method used: ", method)
+        println("Number of test functions K: ", K)
+
+        println("\nBest parameter estimates:")
+        for (var, val) in zip(vars, best_result)
+            println(var, " = ", val)
+        end
+
+        println("\nResidual sum of squares (RSS_Lhat_L(Y)): ", RSS)
+        println("Residual sum of squares (RSS_Ihat_Idata): ", Logic.get_RSS(Ihat_best, I_data))
+
+        true_scaled = Logic.to_scaled(true_vals, T)
+
+        println("RSS weak at true params = ",
+            Logic.get_RSS(Y, L_hat(true_scaled, I0, W1, W2, W3))
+        )
+
+        println("RSS weak at best params = ",
+            Logic.get_RSS(Y, L_hat(best_result_scaled, I0, W1, W2, W3))
+        )
+
+        println("pointwise RSS at true params = ",
+            Logic.get_RSS(I_data, Logic.I_hat(true_scaled, B...))
+        )
+
+        println("pointwise RSS at best weak params = ",
+            Logic.get_RSS(I_data, Logic.I_hat(best_result_scaled, B...))
+        )
+
+
+        println("\nParameter error: ", parameter_err)
+
+        println("ALL real results -- #", length(real_results))
+        for r in real_results
+            r_physical = Logic.to_physical(r, T)
+            println("RSS ", Logic.get_RSS(Y, L_hat(r, I0, W1, W2, W3)))
+            println("parameter error ", Logic.get_param_error(r_physical, true_vals))
+        end
+
+        println("ALL final results -- #", length(final_results_scaled))
+        for r in final_results_scaled
+            if r == best_result_scaled
+                printstyled("best result!\n", color=:yellow)
+            end
+            r_physical = Logic.to_physical(r, T)
+
+            println("RSS ", Logic.get_RSS(Y, L_hat(r, I0, W1, W2, W3)))
+            println("parameter error ", Logic.get_param_error(r_physical, true_vals))
+        end
+
+    end
+
+    return best_result, RSS, parameter_err
+end
+
+
+function _HC_LS_weak(
     t::Vector{Float64},
     I_data::Vector{Float64},
     vars::Vector,
@@ -238,6 +648,7 @@ function HC_LS_weak(
         Ihat_best = Logic.I_hat(best_result, B...)
 
         printstyled("=== HC_LS_weak SIR Results ===\n", color = :magenta, bold = true)
+        println("No time rescaling")
         println("Method used: ", method)
         println("Number of test functions K: ", K)
 
