@@ -251,6 +251,9 @@ module Logic
         best_result_scaled = final_results_scaled[idx_best_after]
         RSS_Ihat_Idata = get_RSS(I_data, I_hat(best_result_scaled, B...))
 
+        true_vals_scaled = to_scaled(true_vals, T)
+        RSS_Ihat_Idata_w_true_vals = Logic.get_RSS(I_data, I_hat(true_vals_scaled, B...))
+
         if idx_best_before != idx_best_after
             printstyled("Best result before and after LS mismatch", color = :red)
             println("Best result before LS: ", best_result_scaled_beforeLS)
@@ -271,6 +274,7 @@ module Logic
             best_result = best_result,
             parameter_err = parameter_err,
             RSS_Ihat_Idata = RSS_Ihat_Idata,
+            RSS_Ihat_Idata_w_true_vals = RSS_Ihat_Idata_w_true_vals,
             RSS_Idata_I = RSS_Idata_I,
             vars=vars
         )
@@ -288,6 +292,9 @@ module Logic
         end
 
         println("\nResidual sum of squares (RSS_Ihat_Idata): ", results.RSS_Ihat_Idata)
+        println("pointwise RSS at true params = ",
+            results.RSS_Ihat_Idata_w_true_vals
+        )
 
         println("\nParameter error: ", results.parameter_err)
 

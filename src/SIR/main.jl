@@ -63,11 +63,12 @@ end
 
 function main()
 
+    Random.seed!(1234)
     t = collect(0.0:10.0:1000.0)
 
     S, I, R = Logic.simulate_sir(t)
 
-    noise = 0.01
+    noise = 0
     I_data = I .+ noise .* I .* randn(length(I))
 
     # Optional: avoid negative infected values after adding noise
@@ -75,15 +76,18 @@ function main()
 
     results = Logic.HC_LS(t, I_data, variables, "S")
     Logic.print_HC_LS(results)
+#
+     K = 12
+#    # before time rescaling
+#    _HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
+#    # after time rescaling
+#
+#    HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
+#    println()
 
-    K = 12
-    # before time rescaling
-    _HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
-    # after time rescaling
 
     HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
-    println()
-
+    _HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
     # results = stability_test(n_trials=20, K=8, noise=0.01)
 end
 

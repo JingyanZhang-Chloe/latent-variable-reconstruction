@@ -27,7 +27,7 @@ function main()
     # Optional: avoid negative infected values after adding noise
     I_data = max.(I_data, 0.0)
 
-    weak_block_analysis(I_data, t, 12, ["S", "S_improved", "S_formula_improved"])
+    weak_block_analysis(I_data, t, 20, ["S", "S_improved", "S_formula_improved"])
 end
 
 main()

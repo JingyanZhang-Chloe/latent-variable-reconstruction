@@ -660,6 +660,22 @@ function _HC_LS_weak(
         println("\nResidual sum of squares (RSS_Lhat_L(Y)): ", RSS)
         println("Residual sum of squares (RSS_Ihat_Idata): ", Logic.get_RSS(Ihat_best, I_data))
 
+        println("RSS weak at true params = ",
+            Logic.get_RSS(Y, L_hat(true_vals, I0, W1, W2, W3))
+        )
+
+        println("RSS weak at best params = ",
+            Logic.get_RSS(Y, L_hat(best_result, I0, W1, W2, W3))
+        )
+
+        println("pointwise RSS at true params = ",
+            Logic.get_RSS(I_data, Logic.I_hat(true_vals, B...))
+        )
+
+        println("pointwise RSS at best weak params = ",
+            Logic.get_RSS(I_data, Logic.I_hat(best_result, B...))
+        )
+
         println("\nParameter error: ", parameter_err)
 
         println("ALL real results -- #", length(real_results))
