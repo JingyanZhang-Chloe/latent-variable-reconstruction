@@ -139,55 +139,12 @@ module Integrate
     end
 
 
-    using QuadGK
-    """
-    quadgk(f, a,b,c...; rtol=sqrt(eps), atol=0, maxevals=10^7, order=7, norm=norm, segbuf=nothing, eval_segbuf=nothing)
-
-    The algorithm is an adaptive Gauss-Kronrod integration technique:
-    the integral in each interval is estimated using a Kronrod rule (2*order+1 points)
-    and the error is estimated using an embedded Gauss rule (order points).
-    The interval with the largest error is then subdivided into two intervals and the process is repeated until the desired error tolerance is achieved.
-    """
-
-    function quadratic_lagrange_integral(
-        measure::Function,
-        a, b,
-        x0,
-        x1,
-        x2,
-        y0,
-        y1,
-        y2,
-        rtol
-    )
-        """
-        given x, y, measure
-        return ∫ from x0 to x2 of measure * y wrt x
-        """
-
-        if x0 == x1 || x0 == x2 || x1 == x2
-            error("Interpolation nodes must be distinct")
-        end
-
-        # Here based on the Lagrange interpolation formula for approximating y (first part of Simpson method)
-        # L = y0*l0 + y1*l1 + y2*l2 the approximation of f
-        l0(x) = ((x - x1) * (x - x2)) / ((x0 - x1) * (x0 - x2))
-        l1(x) = ((x - x0) * (x - x2)) / ((x1 - x0) * (x1 - x2))
-        l2(x) = ((x - x0) * (x - x1)) / ((x2 - x0) * (x2 - x1))
-
-        # So target integration is
-        # ∫ [y0*l0 + y1*l1 + y2*l2] * measure
-        # y0 * ∫ l0*measure + y1 * ∫ l1*measure + y2 * ∫ l2*measure
-        # Since now l * measure is no longer the quadratic function approximated in original Simpson method, we cannot directly apply the formula?
-
-        A0, _ = quadgk(x -> l0(x) * measure(x), a, b; rtol=rtol)
-        A1, _ = quadgk(x -> l1(x) * measure(x), a, b; rtol=rtol)
-        A2, _ = quadgk(x -> l2(x) * measure(x), a, b; rtol=rtol)
-
-        return A0 * y0 + A1 * y1 + A2 * y2
-    end
-
-
+    # ====================================================================================================
+        # Goal: Compute ∫ f * φ
+        # Method: Based on Simpson, for each three points, approximate f by a quadratic function
+        # f ≈ Ax^2 + Bx + C
+        # Then by formula to compute the anti-derivative ∫ (Ax^2 + Bx + C) * φ
+    # ====================================================================================================
     function get_coefficients(
         x0,
         x1,
@@ -290,7 +247,7 @@ module Integrate
     end
 
 
-    function cumintegrate_improved(x::AbstractVector, y::AbstractVector, k::Int, t::Vector{Float64}, measure::Symbol, derivative::Bool)::Float64
+    function cumintegrate_formula_improved(x::AbstractVector, y::AbstractVector, k::Int, t::Vector{Float64}, measure::Symbol, derivative::Bool)::Float64
         """
         compute the integration of measure * y wrt x
         since for now we only need the integrating value on the full interval x, only compute that value
@@ -394,7 +351,63 @@ module Integrate
     end
 
 
-    function _cumintegrate_improved(x::AbstractVector, y::AbstractVector, measure::Function, rtol)::Float64
+
+    # ====================================================================================================
+        # Goal: Compute ∫ f * φ
+        # Method: Based on Simpson, for each three points, approximate f by Lagrange interpolation formula
+        # f ≈ L
+        # Then by QuadGK, compute the anti-derivative ∫ L * φ
+    # ====================================================================================================
+    using QuadGK
+    """
+    quadgk(f, a,b,c...; rtol=sqrt(eps), atol=0, maxevals=10^7, order=7, norm=norm, segbuf=nothing, eval_segbuf=nothing)
+
+    The algorithm is an adaptive Gauss-Kronrod integration technique:
+    the integral in each interval is estimated using a Kronrod rule (2*order+1 points)
+    and the error is estimated using an embedded Gauss rule (order points).
+    The interval with the largest error is then subdivided into two intervals and the process is repeated until the desired error tolerance is achieved.
+    """
+
+    function quadratic_lagrange_integral(
+        measure::Function,
+        a, b,
+        x0,
+        x1,
+        x2,
+        y0,
+        y1,
+        y2,
+        rtol
+    )
+        """
+        given x, y, measure
+        return ∫ from x0 to x2 of measure * y wrt x
+        """
+
+        if x0 == x1 || x0 == x2 || x1 == x2
+            error("Interpolation nodes must be distinct")
+        end
+
+        # Here based on the Lagrange interpolation formula for approximating y (first part of Simpson method)
+        # L = y0*l0 + y1*l1 + y2*l2 the approximation of f
+        l0(x) = ((x - x1) * (x - x2)) / ((x0 - x1) * (x0 - x2))
+        l1(x) = ((x - x0) * (x - x2)) / ((x1 - x0) * (x1 - x2))
+        l2(x) = ((x - x0) * (x - x1)) / ((x2 - x0) * (x2 - x1))
+
+        # So target integration is
+        # ∫ [y0*l0 + y1*l1 + y2*l2] * measure
+        # y0 * ∫ l0*measure + y1 * ∫ l1*measure + y2 * ∫ l2*measure
+        # Since now l * measure is no longer the quadratic function approximated in original Simpson method, we cannot directly apply the formula?
+
+        A0, _ = quadgk(x -> l0(x) * measure(x), a, b; rtol=rtol)
+        A1, _ = quadgk(x -> l1(x) * measure(x), a, b; rtol=rtol)
+        A2, _ = quadgk(x -> l2(x) * measure(x), a, b; rtol=rtol)
+
+        return A0 * y0 + A1 * y1 + A2 * y2
+    end
+
+
+    function cumintegrate_improved(x::AbstractVector, y::AbstractVector, measure::Function, rtol)::Float64
         """
         compute the integration of measure * y wrt x
         since for now we only need the integrating value on the full interval x, only compute that value
@@ -452,6 +465,40 @@ module Integrate
     end
 
 
+
+
+    # ====================================================================================================
+        # Goal: Compute ∫ f * φ
+        # Method: Based on quadratic spline, which would guarantee some smoothness on the approximation of f
+        # Using DataInterpolations
+    # ====================================================================================================
+
+    using DataInterpolations
+    """
+    Quadratic Spline
+
+    This is the quadratic spline.
+    It is a continuously differentiable interpolation which hits each of the data points exactly.
+    Splines are a local interpolation method, meaning that the curve in a given spot is only affected by the points nearest to it.
+    """
+
+    function make_interp(y::Vector{Float64}, t::Vector{Float64}; kind::Symbol=:quadratic)
+        if kind == :quadratic
+            return QuadraticSpline(y, t)
+        elseif kind == :cubic
+            return CubicSpline(y, t)
+        elseif kind == :akima
+            return AkimaInterpolation(y, t)
+        else
+            error("Unknown interpolation kind: $kind")
+        end
+    end
+
+    # Since in our blocks, we should have sth like ∫ f * g
+    # Which should be intepreted as ∫ f_approx * g_approx instead of ∫ (f * g)_approx???
+    # So we directly perform the full integration in get_weak_blocks
+
+
     function integrate(
         x::Vector, y::Vector, method::String;
         measure::Union{Function, Nothing}=nothing,
@@ -476,7 +523,7 @@ module Integrate
                 error("S_improved require a measure function")
                 return
             else
-                return _cumintegrate_improved(x, y, measure, rtol)
+                return cumintegrate_improved(x, y, measure, rtol)
             end
         elseif method == "S_formula_improved"
             """
@@ -492,7 +539,7 @@ module Integrate
                 return
             end
 
-            return cumintegrate_improved(x, y, k, t, basis, derivative)
+            return cumintegrate_formula_improved(x, y, k, t, basis, derivative)
         else
             error("method must be T, S, S_uniform, or S_improved")
         end

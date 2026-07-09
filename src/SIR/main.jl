@@ -68,14 +68,14 @@ function main()
 
     S, I, R = Logic.simulate_sir(t)
 
-    noise = 0
+    noise = 0.01
     I_data = I .+ noise .* I .* randn(length(I))
 
     # Optional: avoid negative infected values after adding noise
     I_data = max.(I_data, 0.0)
 
-    results = Logic.HC_LS(t, I_data, variables, "S")
-    Logic.print_HC_LS(results)
+#    results = Logic.HC_LS(t, I_data, variables, "S")
+#    Logic.print_HC_LS(results)
 #
      K = 12
 #    # before time rescaling
@@ -86,9 +86,23 @@ function main()
 #    println()
 
 
-    HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
-    _HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
-    # results = stability_test(n_trials=20, K=8, noise=0.01)
+    HC_LS_weak(t, I_data, variables, "S_improved", :sin; K=K)
+    HC_LS_weak(t, I_data, variables, "S_improved", :bump; K=K)
+    HC_LS_weak(t, I_data, variables, "S_improved", :hartley; K=K)
+    HC_LS_weak(t, I_data, variables, "S_improved", :polynomial; K=K)
+#    _HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
+
+#    HC_LS_weak(t, I_data, variables, "QSpline_GK"; K=K)
+#    _HC_LS_weak(t, I_data, variables, "QSpline_GK"; K=K)
+#    # results = stability_test(n_trials=20, K=8, noise=0.01)
+#
+#    HC_LS_weak(t, I_data, variables, "CSpline_GK"; K=K)
+#    _HC_LS_weak(t, I_data, variables, "CSpline_GK"; K=K)
+#
+#    HC_LS_weak(t, I_data, variables, "Akima_GK"; K=K)
+#    _HC_LS_weak(t, I_data, variables, "Akima_GK"; K=K)
+
+    println()
 end
 
 main()

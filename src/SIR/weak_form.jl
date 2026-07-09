@@ -19,9 +19,167 @@ using LsqFit
 using Random
 using Printf
 using LinearAlgebra
+using QuadGK
+using DataInterpolations
 
 
-function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, method)
+function in_exception(me::String)
+    return (me in ["S_improved", "S_formula_improved", "QSpline_GK", "CSpline_GK", "Akima_GK", "Qspline_exact", "CSpine_exact", "Akima_exact"])
+end
+
+
+function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method::String)
+    if method in ["QSpline_GK", "Qspline_exact"]
+        return QuadraticSpline(I_data, t)
+
+    elseif method in ["CSpline_GK", "CSpine_exact"]
+        return CubicSpline(I_data, t)
+
+    elseif method in ["Akima_GK", "Akima_exact"]
+        return AkimaInterpolation(I_data, t)
+
+    else
+        error("Unknown spline-GK method: $method")
+    end
+end
+
+
+function local_poly_coeffs(Ihat, a, b, degree::Int)
+    """
+    QSpline has degree 2
+    CSpline and Akima have degree 3 (since C2)
+
+    We are storing the coefficients of q(z)
+    Then Ihat in [a, b] => Ihat(x) = q(x-m)
+    """
+
+    m = (a + b) / 2
+    h = (b - a) / 2
+
+    c0 = Ihat(m)
+    c1 = DataInterpolations.derivative(Ihat, m, 1)
+    c2 = 0.5 * DataInterpolations.derivative(Ihat, m, 2)
+
+    if degree == 2
+        return [c0, c1, c2, 0], m
+    elseif degree == 3
+        c3 = (Ihat(b) - Ihat(a) - 2 * c1 * h) / 2 * h^3
+
+        return [c0, c1, c2, c3], m
+    else
+        error("Only degree 2 or 3 supported for now")
+    end
+end
+
+
+function poly_mul(p_coeffs::Vector{Float64}, q_coeffs::Vector{Float64})
+    """
+    Multiply two polynomials, given their coefficients as Vector
+    Return the resulting polynomial coefficients Vector
+    """
+    r = zeros(Float64, length(p_coeffs) + length(q_coeffs) - 1)
+
+    for i in eachindex(p_coeffs)
+        for j in eachindex(q_coeffs)
+            r[i + j - 1] += p_coeffs[i] * q_coeffs[j]
+        end
+    end
+
+    return r
+end
+
+
+function get_F_coeffs(qcoeffs::Vector{Float64}, h, Fa)
+    """
+    Giving the coeff of Ihat, compute on the interval [a, b]
+    F = ∫ Ihat(s) ds
+    Return the coefficients Vector of F, since it is also a polynomial
+    Assuming we know F(a)
+
+    F(s) = ∫_a^s Ihat(x)dx
+    => (z = x - m) recall m = a+b/2 and h = b-a/2
+    F(s) = ∫_(a-m)^(s-m) [c0 + c1 z + c2 z^2 + c3 z^3] dz
+    =>
+    F(s) = ∫_(-h)^(s-m) [c0 + c1 z + c2 z^2 + c3 z^3] dz
+    """
+
+    deg = length(qcoeffs) - 1
+    Fcoeffs = zeros(Float64, deg + 2)
+
+    Fcoeffs[1] = Fa
+    for n in 0:deg
+        # For each term of q --- c_n * z^n --- integrate: c_n 1/n+1 * ((s-m)^(n+1) - (-h)^(n+1))
+        # If we do u = s-m
+        # So F(s) = F(u + m) = ~F(u) = poly we are computing rn
+        # So we have a constant term: - c_n * 1/n+1 * (-h)^(n+1)
+        # And a z^(n+1) term with coeff: c_n * 1/n+1
+        c = qcoeffs[n + 1]
+
+        # constant part from - c * (-h)^(n+1)/(n+1)
+        Fcoeffs[1] -= c * (-h)^(n + 1) / (n + 1)
+
+        # coefficient of z^(n+1)
+        Fcoeffs[n + 2] += c / (n + 1)
+    end
+
+    return Fcoeffs
+end
+
+
+function cumulative_F(Fa, a, b)
+    """
+    Compute F(b)
+    """
+end
+
+
+function trig_moments(n, basis::Symbol, a, b)
+    """
+    Compute ∫ z^n sin or ∫ z^n cos
+    """
+end
+
+
+function get_testing_function(t::Vector{Float64}, k::Int, K::Int, testing_function::Symbol, if_function::Bool=true; m::Union{Int, Nothing})
+    if testing_function == :sin
+        if if_function
+            phi, dphi = Measure.measure_sine_function(t, k)
+        else
+            phi, dphi = Measure.measure_sine(t, k)
+        end
+
+    elseif testing_function == :bump
+        if if_function
+            phi, dphi = Measure.measure_bump_function(t, k, K)
+        else
+            phi, dphi = Measure.measure_bump(t, k, K)
+        end
+
+    elseif testing_function == :hartley
+        if if_function
+            phi, dphi = Measure.measure_hartley_function(t, k, K)
+        else
+            phi, dphi = Measure.measure_hartley(t, k, K)
+        end
+
+    elseif testing_function == :polynomial
+        if m === nothing
+            error("Polynomial test functions require degree m")
+        end
+
+        if if_function
+            phi, dphi = Measure.measure_polynomial_function(t, k, K, m)
+        else
+            phi, dphi = Measure.measure_polynomial(t, k, K, m)
+        end
+
+    else
+        error("not implemented yet heihei")
+    end
+end
+
+
+function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, method, testing_function::Symbol; m::Union{Int, Nothing}=nothing)
     # Since we are differentiating, maybe it is better to write in the original form
     Y  = zeros(K)   # weak left-hand side ∫ phi I'
     W1 = zeros(K)   # ∫ phi I
@@ -36,7 +194,7 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
         F = Integrate.integrate(t, I_data, "S")
 
         for k in 1:K
-            phi, dphi = Measure.measure_sine_function(t, k)
+            phi, dphi = get_testing_function(t, k, K, testing_function; m)
 
             # General weak LHS, including boundary term
             boundary = phi(t[end]) * I_data[end] - phi(t[1]) * I_data[1]
@@ -47,6 +205,10 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
             W3[k] = Integrate.integrate(t, I_data .* F, method; measure=phi)
         end
     elseif method == "S_formula_improved"
+        if testing_function != :sin
+            error("S_formula_improved hardcodes sine testing function, invalide testing function choice $testing_function")
+        end
+
         F = Integrate.integrate(t, I_data, "S")
 
         for k in 1:K
@@ -60,10 +222,37 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
             W2[k] = Integrate.integrate(t, (I_data .^ 2), method; t=t, k=k, basis=:sin)
             W3[k] = Integrate.integrate(t, I_data .* F, method; t=t, k=k, basis=:sin)
         end
+    elseif method in ["QSpline_GK", "CSpline_GK", "Akima_GK"]
+        t0 = t[1]
+        tT = t[end]
+        L = tT - t0
+
+        # First approximate I
+        Ihat = build_I_interpolant(t, I_data, method)
+        # So Ihat is Ihat(x) = c0 + c1 * z + c2 * z^2 + c3 * z^3
+
+        # F(x) here we can use DataInterpolations.integrate since we are integrating the interpolation obj from DataInterpolations
+        F(x) = DataInterpolations.integral(Ihat, t0, x)
+
+        for k in 1:K
+            # General weak LHS, including boundary term
+            phi, dphi = get_testing_function(t, k, K, testing_function; m)
+            boundary = phi(tT) * I_data[end] - phi(t0) * I_data[1]
+
+            Y[k] = boundary - quadgk(x -> dphi(x) * Ihat(x), t)[1]
+
+            W1[k] = quadgk(x -> phi(x) * Ihat(x), t)[1]
+            W2[k] = quadgk(x -> phi(x) * Ihat(x)^2, t)[1]
+            W3[k] = quadgk(x -> phi(x) * Ihat(x) * F(x), t)[1]
+        end
+
+    elseif method in ["QSpline_exact", "CSpline_exact", "Akima_exact"]
+        error("not implemented heihei")
     else
         F = Integrate.integrate(t, I_data, method)
 
         for k in 1:K
+            phi, dphi = get_testing_function(t, k, K, testing_function, false; m)
             phi, dphi = Measure.measure_sine(t, k)
 
             # General weak LHS, including boundary term
@@ -115,7 +304,7 @@ function get_W3_IntByParts(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, 
 end
 
 
-function weak_block_analysis(
+function _weak_block_analysis(
     I_data::Vector{Float64},
     t::Vector{Float64},
     K::Int,
@@ -192,7 +381,7 @@ end
 
 
 
-function _weak_block_analysis(
+function weak_block_analysis(
     I_data::Vector{Float64},
     t::Vector{Float64},
     K::Int,
@@ -347,10 +536,12 @@ function HC_LS_weak(
     t::Vector{Float64},
     I_data::Vector{Float64},
     vars::Vector,
-    method::String;
+    method::String,
+    testing_function::Symbol;
     K::Int = 8,
     true_vals=Value.true_vals,
-    if_print=true
+    if_print=true,
+    m=10
 )
     """
     YES time rescaling
@@ -359,7 +550,7 @@ function HC_LS_weak(
     """
     T, _ = select_T_weak(I_data, t, K, method)
     t_scaled = t ./ T
-    Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method)
+    Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m)
 
     I0 = I_data[1]
 
@@ -461,16 +652,19 @@ function HC_LS_weak(
     parameter_err = Logic.get_param_error(best_result, true_vals)
 
     if if_print
-        if method == "S_improved" || method == "S_formula_improved"
+        if in_exception(method)
             B = Logic.get_blocks(I_data, t_scaled, "S")
         else
             B = Logic.get_blocks(I_data, t_scaled, method)
         end
         Ihat_best = Logic.I_hat(best_result_scaled, B...)
 
-        printstyled("=== HC_LS_weak SIR Results ===\n", color = :magenta, bold = true)
+        printstyled("===== HC_LS_weak SIR Results =====\n", color = :magenta, bold = true)
         println("Selected time rescale factor: ", T)
-        println("Method used: ", method)
+        printstyled("Method used: $method", color= :blue)
+        println()
+        printstyled("Testing function used: $testing_function", color= :blue)
+        println()
         println("Number of test functions K: ", K)
 
         println("\nBest parameter estimates:")
@@ -526,6 +720,10 @@ function HC_LS_weak(
 end
 
 
+"""
+NOT UPDATED
+This version uses NO time rescaling
+"""
 function _HC_LS_weak(
     t::Vector{Float64},
     I_data::Vector{Float64},
@@ -640,16 +838,17 @@ function _HC_LS_weak(
     parameter_err = Logic.get_param_error(best_result, true_vals)
 
     if if_print
-        if method == "S_improved" || method == "S_formula_improved"
+        if in_exception(method)
             B = Logic.get_blocks(I_data, t, "S")
         else
             B = Logic.get_blocks(I_data, t, method)
         end
         Ihat_best = Logic.I_hat(best_result, B...)
 
-        printstyled("=== HC_LS_weak SIR Results ===\n", color = :magenta, bold = true)
+        printstyled("===== HC_LS_weak SIR Results =====\n", color = :magenta, bold = true)
         println("No time rescaling")
-        println("Method used: ", method)
+        printstyled("Method used: $method", color= :blue)
+        println()
         println("Number of test functions K: ", K)
 
         println("\nBest parameter estimates:")
