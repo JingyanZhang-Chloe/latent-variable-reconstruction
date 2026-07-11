@@ -32,6 +32,9 @@ module Measure
         """
         nrm2 = trapz(t, phi_raw .^ 2)
         if nrm2 <= eps()
+            println("phi min = ", minimum(phi_raw))
+            println("phi max = ", maximum(phi_raw))
+            println("phi norm = ", trapz(t, phi_raw.^2))
             error("Cannot normalize: test function is almost zero on this grid")
         end
         return 1.0 / sqrt(nrm2)
@@ -106,9 +109,13 @@ module Measure
         t::AbstractVector{<:Real},
         k::Int,
         K::Int;
-        a::Real = 0.6,
+        a::Real = 2.0,
         η::Real = 9.0,
     )
+
+        # ??? Should we hardcode a
+        a = (t[end] - t[1]) / K + 1
+
         c = support_center(t, k, K, a)
 
         function raw(u)
@@ -171,9 +178,13 @@ module Measure
         t::AbstractVector{<:Real},
         k::Int,
         K::Int;
-        a::Real = 0.6,
+        a::Real = 2.0,
         η::Real = 9.0,
     )
+
+        # ??? Should we hardcode a
+        a = (t[end] - t[1]) / K + 1
+
         c = support_center(t, k, K, a)
 
         function raw(u)
@@ -449,4 +460,107 @@ module Measure
         return phi, dphi, ddphi
     end
 
+
+
+    # ====================================================================================================
+    # Chebyshev first kind  T_n / \sqrt(1 - x^2)
+
+    # Since Chebyshev coefficients are defined on [-1, 1]
+    # We need to transform [t0, tT] to [-1, 1]
+    # t in [t0, tT] corresponds to -1 + 2/(tT - t0) * (t - t0)
+    # ====================================================================================================
+
+    ### BOUNDARY ISSUE!!  T_n / \sqrt(1 - x^2) at x=1 or -1 is infinite
+
+    function chebyshev_T(t, k)
+        t0 = t[1]
+        tT = t[end]
+
+        x = (2 .* t .- (t0+tT))/(tT-t0)
+        phi = cos.(k .* acos.(x)) ./ sqrt.(1 .- x.^2)
+
+        dxdt = 2/(tT-t0)
+        T = cos.(k .* acos.(x))
+        Tp = k .* sin.(k .* acos.(x)) ./ sqrt.(1 .- x.^2)
+
+        numerator = Tp .* (1-x.^2) .+ x.*T
+        dphidx = numerator ./ (1-x.^2).^(3/2)
+
+        dphi = dphidx .* dxdt
+
+        return phi, dphi
+    end
+
+
+    function chebyshev_T_function(t0, tT, k)
+        function phi(t)
+            x = (2t-(t0+tT))/(tT-t0)
+            return cos(k*acos(x))/sqrt(1-x^2)
+        end
+
+        dxdt = 2/(tT-t0)
+
+        function dphi(t)
+            x=(2t-(t0+tT))/(tT-t0)
+            T = cos(k * acos(x))
+
+            Tp = k*sin(k * acos(x))/sqrt(1-x^2)
+            numerator = Tp*(1-x^2) + x*T
+            dphidx = numerator/(1-x^2)^(3/2)
+
+            return dphidx*dxdt
+        end
+
+        return phi, dphi
+    end
+
+
+    # ====================================================================================================
+    # Chebyshev second kind  U_n \sqrt(1 - x^2)
+    # ====================================================================================================
+
+    function chebyshev_U(t, k)
+        t0 = t[1]
+        tT = t[end]
+
+        x = clamp.(
+            (2 .* t .- (t0+tT))/(tT-t0),
+            -1.0,
+            1.0
+        )
+
+        # phi = U_k(x)*sqrt(1-x^2)
+        # simplified form
+        phi = sin.((k+1) .* acos.(x))
+
+        # derivative
+        dxdt = 2/(tT-t0)
+        dphi = -(k+1) .* cos.((k+1).*acos.(x)) ./ sqrt.(1 .- x.^2)
+        dphi = dphi .* dxdt
+
+        return phi, dphi
+    end
+
+
+    function chebyshev_U_function(t, k)
+        t0 = t[1]
+        tT = t[end]
+
+        function phi(s)
+            x = clamp((2s-(t0+tT))/(tT-t0), -1.0, 1.0)
+            return sin((k+1)*acos(x))
+        end
+
+        function dphi(s)
+            dxdt = 2/(tT-t0)
+            x = clamp((2s-(t0+tT))/(tT-t0), -1.0, 1.0)
+
+            return -(k+1) *
+                   cos((k+1)*acos(x)) /
+                   sqrt(1-x^2) *
+                   dxdt
+        end
+
+        return phi, dphi
+    end
 end

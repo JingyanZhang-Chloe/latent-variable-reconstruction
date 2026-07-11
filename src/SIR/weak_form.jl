@@ -150,16 +150,16 @@ function get_testing_function(t::Vector{Float64}, k::Int, K::Int, testing_functi
 
     elseif testing_function == :bump
         if if_function
-            phi, dphi = Measure.measure_bump_function(t, k, K)
+            phi, dphi, _ = Measure.measure_bump_function(t, k, K)
         else
-            phi, dphi = Measure.measure_bump(t, k, K)
+            phi, dphi, _ = Measure.measure_bump(t, k, K)
         end
 
     elseif testing_function == :hartley
         if if_function
-            phi, dphi = Measure.measure_hartley_function(t, k, K)
+            phi, dphi, _ = Measure.measure_hartley_function(t, k, K)
         else
-            phi, dphi = Measure.measure_hartley(t, k, K)
+            phi, dphi, _ = Measure.measure_hartley(t, k, K)
         end
 
     elseif testing_function == :polynomial
@@ -168,13 +168,119 @@ function get_testing_function(t::Vector{Float64}, k::Int, K::Int, testing_functi
         end
 
         if if_function
-            phi, dphi = Measure.measure_polynomial_function(t, k, K, m)
+            phi, dphi, _ = Measure.measure_polynomial_function(t, k, K, m)
         else
-            phi, dphi = Measure.measure_polynomial(t, k, K, m)
+            phi, dphi, _ = Measure.measure_polynomial(t, k, K, m)
+        end
+
+    elseif testing_function == :chebyshev_T
+        error("boundary issue")
+
+    elseif testing_function == :chebyshev_U
+        if if_function
+            phi, dphi = Measure.chebyshev_U_function(t, k)
+        else
+            phi, dphi = Measure.chebyshev_U(t, k)
         end
 
     else
         error("not implemented yet heihei")
+    end
+end
+
+
+using QuadGK
+
+function chebyshev_U_Y(
+    Ihat,
+    t0,
+    tT,
+    k
+)
+    """
+    This is for IHAT is a FUNCTION!
+
+    Y = boundary - quadgk(x -> dphi(x) * Ihat(x), t)[1]
+
+    If chebyshev U, then we know phi(-1) = phi(1) = 0, boundary = 0
+    Y = - quadgk(x -> dphi(x) * Ihat(x), t)[1]
+
+    change of variable x = cosθ
+    Then ∫ from π to 0
+    θ = π corresponds to t0
+    θ = 0 corresponds to tT
+
+    x(t) = (2t-(t0+tT))/(tT-t0)
+    t(θ) = [cosθ (tT - t0) + (t0 + tT)] / 2
+    x(t(θ)) = cosθ
+
+    Since phi(t) = sin((k+1)*acos(x(t)))
+    phi(t(θ)) = sin((k+1)θ)
+
+    dphi(t(θ)) = dphi/dt (t(θ))
+    We have dphi/dθ = (k+1)cos((k+1)θ)
+    by chain rule dphi(t(θ)) = dphi/dt (t(θ)) = dphi/dθ * dθ/dt = (k+1)cos((k+1)θ) * - 2/Lsinθ
+    dt = - Lsinθ/2 dθ
+
+    Hence the integral Y = - quadgk(x -> dphi(x) * Ihat(x), t)[1]
+    ==> Y = - quadgk(θ -> Ihat(x) * {[(k+1)cos((k+1)θ) * - 2/Lsinθ] * - Lsinθ/2}, π, 0)
+    ==> Y = quadgk(θ -> Ihat(x) * {(k+1)cos((k+1)θ)}, 0, π)
+    """
+    L = tT - t0
+
+    t_from_theta(θ) =
+        (t0 + tT) / 2 + (L / 2) * cos(θ)
+
+    m = k + 1
+
+    return m * quadgk(
+        θ -> Ihat(t_from_theta(θ)) * cos(m * θ),
+        0,
+        π
+    )[1]
+end
+
+
+function chebyshev_U_Y_vector(
+    I_data::Vector{Float64},
+    t::Vector{Float64},
+    k,
+    method
+)
+    """
+    This is for IHAT is a FUNCTION!
+    """
+    t0 = t[1]
+    tT = t[end]
+    m = k + 1
+
+    x = clamp.(
+        (2 .* t .- (t0 + tT)) / (tT - t0),
+        -1.0,
+        1.0,
+    )
+
+    # t increases, but acos(x) decreases from π to 0
+    theta = reverse(acos.(x))
+    I_theta = reverse(I_data)
+
+    measure_theta(θ) = cos(m * θ)
+
+    if method == "S_improved"
+        return m * Integrate.integrate(
+            theta,
+            I_theta,
+            method;
+            measure = measure_theta,
+        )
+    else
+        measure_theta_vector = measure_theta.(theta)
+
+        return m * Integrate.integrate(
+            theta,
+            measure_theta_vector .* I_theta,
+            method
+        )[end]
     end
 end
 
@@ -185,6 +291,10 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
     W1 = zeros(K)   # ∫ phi I
     W2 = zeros(K)   # ∫ phi I^2
     W3 = zeros(K)   # ∫ phi I F
+
+    t0 = t[1]
+    tT = t[end]
+    L = tT - t0
 
     # Using integration by parts:
     # ∫ phi I' = [phi I]_0^T - ∫ phi' I
@@ -197,13 +307,18 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
             phi, dphi = get_testing_function(t, k, K, testing_function; m)
 
             # General weak LHS, including boundary term
-            boundary = phi(t[end]) * I_data[end] - phi(t[1]) * I_data[1]
-            Y[k] = boundary - Integrate.integrate(t, I_data, method; measure=dphi)
+            if testing_function == :chebyshev_U
+                Y[k] = chebyshev_U_Y_vector(I_data, t, k, method)
+            else
+                boundary = phi(tT) * I_data[end] - phi(t0) * I_data[1]
+                Y[k] = boundary - Integrate.integrate(t, I_data, method; measure=dphi)
+            end
 
             W1[k] = Integrate.integrate(t, I_data, method; measure=phi)
             W2[k] = Integrate.integrate(t, (I_data .^ 2), method; measure=phi)
             W3[k] = Integrate.integrate(t, I_data .* F, method; measure=phi)
         end
+
     elseif method == "S_formula_improved"
         if testing_function != :sin
             error("S_formula_improved hardcodes sine testing function, invalide testing function choice $testing_function")
@@ -214,7 +329,7 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
         for k in 1:K
             # General weak LHS, including boundary term
             phi, dphi = Measure.measure_sine_function(t, k)
-            boundary = phi(t[end]) * I_data[end] - phi(t[1]) * I_data[1]
+            boundary = phi(tT) * I_data[end] - phi(t0) * I_data[1]
 
             Y[k] = boundary - Integrate.integrate(t, I_data, method; t=t, k=k, basis=:sin, derivative=true)
 
@@ -222,10 +337,8 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
             W2[k] = Integrate.integrate(t, (I_data .^ 2), method; t=t, k=k, basis=:sin)
             W3[k] = Integrate.integrate(t, I_data .* F, method; t=t, k=k, basis=:sin)
         end
+
     elseif method in ["QSpline_GK", "CSpline_GK", "Akima_GK"]
-        t0 = t[1]
-        tT = t[end]
-        L = tT - t0
 
         # First approximate I
         Ihat = build_I_interpolant(t, I_data, method)
@@ -237,9 +350,14 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
         for k in 1:K
             # General weak LHS, including boundary term
             phi, dphi = get_testing_function(t, k, K, testing_function; m)
-            boundary = phi(tT) * I_data[end] - phi(t0) * I_data[1]
 
-            Y[k] = boundary - quadgk(x -> dphi(x) * Ihat(x), t)[1]
+            # General weak LHS, including boundary term
+            if testing_function == :chebyshev_U
+                Y[k] = chebyshev_U_Y(Ihat, t0, tT, k)
+            else
+                boundary = phi(tT) * I_data[end] - phi(t0) * I_data[1]
+                Y[k] = boundary - quadgk(x -> dphi(x) * Ihat(x), t)[1]
+            end
 
             W1[k] = quadgk(x -> phi(x) * Ihat(x), t)[1]
             W2[k] = quadgk(x -> phi(x) * Ihat(x)^2, t)[1]
@@ -248,16 +366,20 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
 
     elseif method in ["QSpline_exact", "CSpline_exact", "Akima_exact"]
         error("not implemented heihei")
+
     else
         F = Integrate.integrate(t, I_data, method)
 
         for k in 1:K
             phi, dphi = get_testing_function(t, k, K, testing_function, false; m)
-            phi, dphi = Measure.measure_sine(t, k)
 
             # General weak LHS, including boundary term
-            boundary = phi[end] * I_data[end] - phi[1] * I_data[1]
-            Y[k] = boundary - Integrate.integrate(t, dphi .* I_data, method)[end]
+            if testing_function == :chebyshev_U
+                Y[k] = chebyshev_U_Y_vector(I_data, t, k, method)
+            else
+                boundary = phi[end] * I_data[end] - phi[1] * I_data[1]
+                Y[k] = boundary - Integrate.integrate(t, dphi .* I_data, method)[end]
+            end
 
             W1[k] = Integrate.integrate(t, phi .* I_data, method)[end]
             W2[k] = Integrate.integrate(t, phi .* (I_data .^ 2), method)[end]
@@ -385,11 +507,13 @@ function weak_block_analysis(
     I_data::Vector{Float64},
     t::Vector{Float64},
     K::Int,
-    method_list::Vector{String}
+    method_list::Vector{String},
+    testing_function::Symbol
 )
     println("======================================")
     println("Weak block analysis")
     println("K = ", K)
+    println("Testing function: $testing_function")
     println("======================================")
     for method in method_list
         println()
@@ -397,7 +521,7 @@ function weak_block_analysis(
         printstyled("method = ", method, color=:yellow, bold=true)
         println()
 
-        Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method)
+        Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function)
 
         # ------------------------------------------------------------
         # Table 1: actual signed block values
@@ -493,11 +617,13 @@ function select_T_weak(
     I_data::Vector{Float64},
     t::Vector{Float64},
     K::Int,
-    method::String;
+    method::String,
+    testing_function::Symbol;
+    m,
     m_min::Int = -6,
     m_max::Int = 6,
 )
-    Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method)
+    Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function; m=m)
 
     s = [
         norm(Y),
@@ -548,7 +674,7 @@ function HC_LS_weak(
     No complicated projection to bounds after HC
     Still make initial points in bounds before LS
     """
-    T, _ = select_T_weak(I_data, t, K, method)
+    T, _ = select_T_weak(I_data, t, K, method, testing_function; m=m)
     t_scaled = t ./ T
     Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m)
 

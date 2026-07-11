@@ -21,13 +21,13 @@ function main()
 
     S, I, R = Logic.simulate_sir(t)
 
-    noise = 0.01
+    noise = 0
     I_data = I .+ noise .* I .* randn(length(I))
 
     # Optional: avoid negative infected values after adding noise
     I_data = max.(I_data, 0.0)
 
-    weak_block_analysis(I_data, t, 20, ["S", "S_improved", "S_formula_improved"])
+    weak_block_analysis(I_data, t, 30, ["S_improved", "CSpline_GK"], :chebyshev_U)
 end
 
 main()

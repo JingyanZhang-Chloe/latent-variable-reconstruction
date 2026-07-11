@@ -68,7 +68,8 @@ function main()
 
     S, I, R = Logic.simulate_sir(t)
 
-    noise = 0.01
+    noise = 0.05
+    println("Noise level: $noise")
     I_data = I .+ noise .* I .* randn(length(I))
 
     # Optional: avoid negative infected values after adding noise
@@ -87,9 +88,14 @@ function main()
 
 
     HC_LS_weak(t, I_data, variables, "S_improved", :sin; K=K)
-    HC_LS_weak(t, I_data, variables, "S_improved", :bump; K=K)
-    HC_LS_weak(t, I_data, variables, "S_improved", :hartley; K=K)
-    HC_LS_weak(t, I_data, variables, "S_improved", :polynomial; K=K)
+#    HC_LS_weak(t, I_data, variables, "S_improved", :bump; K=K)
+#    HC_LS_weak(t, I_data, variables, "S_improved", :hartley; K=K)
+#    HC_LS_weak(t, I_data, variables, "S_improved", :polynomial; K=K)
+    HC_LS_weak(t, I_data, variables, "S_improved", :chebyshev_U; K=K)
+
+    HC_LS_weak(t, I_data, variables, "CSpline_GK", :sin; K=K)
+    HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U; K=K)
+
 #    _HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
 
 #    HC_LS_weak(t, I_data, variables, "QSpline_GK"; K=K)
