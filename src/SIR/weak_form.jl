@@ -231,7 +231,7 @@ function chebyshev_U_Y(
     t_from_theta(θ) =
         (t0 + tT) / 2 + (L / 2) * cos(θ)
 
-    m = k + 1
+    m = k
 
     return m * quadgk(
         θ -> Ihat(t_from_theta(θ)) * cos(m * θ),
@@ -252,7 +252,7 @@ function chebyshev_U_Y_vector(
     """
     t0 = t[1]
     tT = t[end]
-    m = k + 1
+    m = k
 
     x = clamp.(
         (2 .* t .- (t0 + tT)) / (tT - t0),

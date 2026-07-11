@@ -529,14 +529,14 @@ module Measure
             1.0
         )
 
-        # phi = U_k(x)*sqrt(1-x^2)
-        # simplified form
-        phi = sin.((k+1) .* acos.(x))
+        # phi_k = U_{k-1}(x) * sqrt(1 - x^2)
+        phi = sin.(k .* acos.(x))
 
-        # derivative
-        dxdt = 2/(tT-t0)
-        dphi = -(k+1) .* cos.((k+1).*acos.(x)) ./ sqrt.(1 .- x.^2)
-        dphi = dphi .* dxdt
+        dxdt = 2 / (tT - t0)
+
+        dphi =
+            -k .* cos.(k .* acos.(x)) ./
+            sqrt.(1 .- x.^2) .* dxdt
 
         return phi, dphi
     end
@@ -548,15 +548,15 @@ module Measure
 
         function phi(s)
             x = clamp((2s-(t0+tT))/(tT-t0), -1.0, 1.0)
-            return sin((k+1)*acos(x))
+            return sin((k)*acos(x))
         end
 
         function dphi(s)
             dxdt = 2/(tT-t0)
             x = clamp((2s-(t0+tT))/(tT-t0), -1.0, 1.0)
 
-            return -(k+1) *
-                   cos((k+1)*acos(x)) /
+            return -(k) *
+                   cos((k)*acos(x)) /
                    sqrt(1-x^2) *
                    dxdt
         end
