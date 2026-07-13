@@ -21,14 +21,16 @@ using Printf
 using LinearAlgebra
 using QuadGK
 using DataInterpolations
+using Plots
+using BSplineKit
 
 
 function in_exception(me::String)
-    return (me in ["S_improved", "S_formula_improved", "QSpline_GK", "CSpline_GK", "Akima_GK", "Qspline_exact", "CSpine_exact", "Akima_exact"])
+    return (me in ["S_improved", "S_formula_improved", "QSpline_GK", "CSpline_GK", "Akima_GK", "Qspline_exact", "CSpine_exact", "Akima_exact", "BSpline_GK"])
 end
 
 
-function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method::String)
+function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method::String, degree::Int)
     if method in ["QSpline_GK", "Qspline_exact"]
         return QuadraticSpline(I_data, t)
 
@@ -38,6 +40,13 @@ function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method
     elseif method in ["Akima_GK", "Akima_exact"]
         return AkimaInterpolation(I_data, t)
 
+    elseif method in ["BSpline_GK"]
+        if degree === nothing
+            error("B_Spline requires interpolation degree")
+        end
+
+        B = BSplineInterpolation(I_data, t, degree, :ArcLen, :Average)
+        return B
     else
         error("Unknown spline-GK method: $method")
     end
@@ -285,7 +294,16 @@ function chebyshev_U_Y_vector(
 end
 
 
-function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, method, testing_function::Symbol; m::Union{Int, Nothing}=nothing)
+function get_weak_blocks(
+    I_data::Vector{Float64},
+    t::Vector{Float64},
+    K::Int,
+    method,
+    testing_function::Symbol;
+    m::Union{Int, Nothing}=nothing,
+    degree::Union{Int, Nothing}=nothing,
+    plot_Ihat::Bool=false
+)
     # Since we are differentiating, maybe it is better to write in the original form
     Y  = zeros(K)   # weak left-hand side ∫ phi I'
     W1 = zeros(K)   # ∫ phi I
@@ -341,8 +359,28 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
     elseif method in ["QSpline_GK", "CSpline_GK", "Akima_GK"]
 
         # First approximate I
-        Ihat = build_I_interpolant(t, I_data, method)
         # So Ihat is Ihat(x) = c0 + c1 * z + c2 * z^2 + c3 * z^3
+        Ihat = build_I_interpolant(t, I_data, method, degree)
+
+        if plot_Ihat
+            p = plot(
+                Ihat;
+                label = "$method interpolant",
+                xlabel = "t",
+                ylabel = "I(t)"
+            )
+
+            scatter!(
+                p,
+                t,
+                I_data;
+                label = "Observed data",
+                markersize=1,
+                markeralpha = 0.3
+            )
+
+            display(p)
+        end
 
         # F(x) here we can use DataInterpolations.integrate since we are integrating the interpolation obj from DataInterpolations
         F(x) = DataInterpolations.integral(Ihat, t0, x)
@@ -362,6 +400,56 @@ function get_weak_blocks(I_data::Vector{Float64}, t::Vector{Float64}, K::Int, me
             W1[k] = quadgk(x -> phi(x) * Ihat(x), t)[1]
             W2[k] = quadgk(x -> phi(x) * Ihat(x)^2, t)[1]
             W3[k] = quadgk(x -> phi(x) * Ihat(x) * F(x), t)[1]
+        end
+
+    elseif method in ["BSpline_GK"]
+        println("B_Spline interpolation of order $degree")
+
+        Ihat = BSplineKit.interpolate(
+            t,
+            I_data,
+            BSplineOrder(degree)
+        )
+        if plot_Ihat
+            p = plot(
+                Ihat;
+                label = "B-spline interpolant",
+                xlabel = "t",
+                ylabel = "I(t)"
+            )
+
+            scatter!(
+                p,
+                t,
+                I_data;
+                label = "Observed data",
+                markersize=1,
+                markeralpha = 0.3
+            )
+
+            display(p)
+        end
+
+        Ispline = BSplineKit.Splines.spline(Ihat)
+
+        # Exact analytical antiderivative.
+        Fhat = BSplineKit.Splines.integral(Ispline)
+
+        for k in 1:K
+            # General weak LHS, including boundary term
+            phi, dphi = get_testing_function(t, k, K, testing_function; m)
+
+            # General weak LHS, including boundary term
+            if testing_function == :chebyshev_U
+                Y[k] = chebyshev_U_Y(Ihat, t0, tT, k)
+            else
+                boundary = phi(tT) * I_data[end] - phi(t0) * I_data[1]
+                Y[k] = boundary - quadgk(x -> dphi(x) * Ihat(x), t)[1]
+            end
+
+            W1[k] = quadgk(x -> phi(x) * Ihat(x), t)[1]
+            W2[k] = quadgk(x -> phi(x) * Ihat(x)^2, t)[1]
+            W3[k] = quadgk(x -> phi(x) * Ihat(x) * Fhat(x), t)[1]
         end
 
     elseif method in ["QSpline_exact", "CSpline_exact", "Akima_exact"]
@@ -508,7 +596,8 @@ function weak_block_analysis(
     t::Vector{Float64},
     K::Int,
     method_list::Vector{String},
-    testing_function::Symbol
+    testing_function::Symbol;
+    degree::Union{Int, Nothing}=nothing
 )
     println("======================================")
     println("Weak block analysis")
@@ -518,10 +607,15 @@ function weak_block_analysis(
     for method in method_list
         println()
         println("-------------------------------------")
+        if method == "BSpline_GK"
+            if degree === nothing
+                error("[weak_block_analysis] BSpline requires degree")
+            end
+        end
         printstyled("method = ", method, color=:yellow, bold=true)
         println()
 
-        Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function)
+        Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function; degree=degree, plot_Ihat=true)
 
         # ------------------------------------------------------------
         # Table 1: actual signed block values
@@ -537,39 +631,39 @@ function weak_block_analysis(
         end
 
         # ------------------------------------------------------------
-        # Table 1: row norms and cond value
+        # Table 2: row norms and cond value
         # ------------------------------------------------------------
-        println()
-        @printf("%4s %14s %14s %14s %14s %14s\n",
-                "k", "|Y|", "|W1|", "|W2|", "|W3|", "row norm")
-
-        row_norms = zeros(K)
-
-        for k in 1:K
-            row_norms[k] = sqrt(Y[k]^2 + W1[k]^2 + W2[k]^2 + W3[k]^2)
-
-            @printf("%4d %14.4e %14.4e %14.4e %14.4e %14.4e\n",
-                    k,
-                    abs(Y[k]),
-                    abs(W1[k]),
-                    abs(W2[k]),
-                    abs(W3[k]),
-                    row_norms[k])
-        end
-
-        println()
-        println("Summary:")
-        println("min row norm = ", minimum(row_norms))
-        println("max row norm = ", maximum(row_norms))
-        println("max/min row norm = ", maximum(row_norms) / minimum(row_norms))
-
-        A = hcat(W1, W2, W3)
-
-        if K >= 3
-            println("condition number of [W1 W2 W3] = ", cond(A))
-        else
-            println("condition number skipped because K < 3")
-        end
+#        println()
+#        @printf("%4s %14s %14s %14s %14s %14s\n",
+#                "k", "|Y|", "|W1|", "|W2|", "|W3|", "row norm")
+#
+#        row_norms = zeros(K)
+#
+#        for k in 1:K
+#            row_norms[k] = sqrt(Y[k]^2 + W1[k]^2 + W2[k]^2 + W3[k]^2)
+#
+#            @printf("%4d %14.4e %14.4e %14.4e %14.4e %14.4e\n",
+#                    k,
+#                    abs(Y[k]),
+#                    abs(W1[k]),
+#                    abs(W2[k]),
+#                    abs(W3[k]),
+#                    row_norms[k])
+#        end
+#
+#        println()
+#        println("Summary:")
+#        println("min row norm = ", minimum(row_norms))
+#        println("max row norm = ", maximum(row_norms))
+#        println("max/min row norm = ", maximum(row_norms) / minimum(row_norms))
+#
+#        A = hcat(W1, W2, W3)
+#
+#        if K >= 3
+#            println("condition number of [W1 W2 W3] = ", cond(A))
+#        else
+#            println("condition number skipped because K < 3")
+#        end
     end
 end
 
@@ -622,8 +716,9 @@ function select_T_weak(
     m,
     m_min::Int = -6,
     m_max::Int = 6,
+    degree::Int
 )
-    Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function; m=m)
+    Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function; m=m, degree=degree)
 
     s = [
         norm(Y),
@@ -667,16 +762,17 @@ function HC_LS_weak(
     K::Int = 8,
     true_vals=Value.true_vals,
     if_print=true,
-    m=10
+    m=10,
+    degree=3
 )
     """
     YES time rescaling
     No complicated projection to bounds after HC
     Still make initial points in bounds before LS
     """
-    T, _ = select_T_weak(I_data, t, K, method, testing_function; m=m)
+    T, _ = select_T_weak(I_data, t, K, method, testing_function; m=m, degree=degree)
     t_scaled = t ./ T
-    Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m)
+    Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, degree=degree)
 
     I0 = I_data[1]
 
