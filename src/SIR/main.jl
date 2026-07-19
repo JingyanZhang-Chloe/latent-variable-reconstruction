@@ -63,7 +63,7 @@ end
 
 function main()
 
-    Random.seed!(1234)
+    # t = collect(0.0:1.0:100.0)
     t = collect(0.0:10.0:1000.0)
 
     S, I, R = Logic.simulate_sir(t)
@@ -78,7 +78,7 @@ function main()
 #    results = Logic.HC_LS(t, I_data, variables, "S")
 #    Logic.print_HC_LS(results)
 #
-     K = 12
+     # K = 60
 #    # before time rescaling
 #    _HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
 #    # after time rescaling
@@ -87,14 +87,19 @@ function main()
 #    println()
 
 
-    HC_LS_weak(t, I_data, variables, "S_improved", :sin; K=K)
+#    HC_LS_weak(t, I_data, variables, "S_improved", :sin; K=K)
 #    HC_LS_weak(t, I_data, variables, "S_improved", :bump; K=K)
 #    HC_LS_weak(t, I_data, variables, "S_improved", :hartley; K=K)
 #    HC_LS_weak(t, I_data, variables, "S_improved", :polynomial; K=K)
-    HC_LS_weak(t, I_data, variables, "S_improved", :chebyshev_U; K=K)
+#    HC_LS_weak(t, I_data, variables, "S_improved", :chebyshev_U; K=K)
 
-    HC_LS_weak(t, I_data, variables, "CSpline_GK", :sin; K=K)
-    HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U; K=K)
+    HC_LS_weak(t, I_data, variables, "BSpline_GK", :chebyshev_U; order=6)
+    HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U)
+
+#    for degree in 3:8
+#        HC_LS_weak(t, I_data, variables, "BSpline_GK", :sin; K=K, degree=degree)
+#        HC_LS_weak(t, I_data, variables, "BSpline_GK", :chebyshev_U; K=K, degree=degree)
+#    end
 
 #    _HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
 

@@ -20,6 +20,9 @@ The following methods are not through function `integrate` in `Integrate.jl`
 
 - `"QSpline_GK"` `"CSpline_GK"` `"Akima_GK"`: using functions in package `DataInterpolations`
   (`QuadraticSpline` `CubicSpline` `AkimaInterpolation`) to approximate C1 or C2 of y. Then use `quadgk` to compute integrals
+
+- `"BSpline_GK"`:
+
 - [TODO] `"Qspline_exact"` `"CSpine_exact"` `"Akima_exact"` (hardcode sine/cosine testing functions): using functions in package `DataInterpolations`
   (`QuadraticSpline` `CubicSpline` `AkimaInterpolation`) to approximate $\hat{y}$ (C1 or C2) of y. Then write $$\hat{y}(x) = c0 + c1*z + c2*z^2 + c3*z^3$$ as polynomial. 
 Then use anti-derivative formula to compute integrals.

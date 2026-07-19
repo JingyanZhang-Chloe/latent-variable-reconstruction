@@ -30,7 +30,7 @@ function in_exception(me::String)
 end
 
 
-function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method::String, degree::Int)
+function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method::String, order::Int)
     if method in ["QSpline_GK", "Qspline_exact"]
         return QuadraticSpline(I_data, t)
 
@@ -41,11 +41,11 @@ function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method
         return AkimaInterpolation(I_data, t)
 
     elseif method in ["BSpline_GK"]
-        if degree === nothing
-            error("B_Spline requires interpolation degree")
+        if order === nothing
+            error("B_Spline requires interpolation order")
         end
 
-        B = BSplineInterpolation(I_data, t, degree, :ArcLen, :Average)
+        B = BSplineInterpolation(I_data, t, order, :ArcLen, :Average)
         return B
     else
         error("Unknown spline-GK method: $method")
@@ -53,6 +53,7 @@ function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method
 end
 
 
+# ======================================================== For Spline_exact
 function local_poly_coeffs(Ihat, a, b, degree::Int)
     """
     QSpline has degree 2
@@ -147,6 +148,9 @@ function trig_moments(n, basis::Symbol, a, b)
     Compute ∫ z^n sin or ∫ z^n cos
     """
 end
+# ========================================================
+
+
 
 
 function get_testing_function(t::Vector{Float64}, k::Int, K::Int, testing_function::Symbol, if_function::Bool=true; m::Union{Int, Nothing})
@@ -301,7 +305,7 @@ function get_weak_blocks(
     method,
     testing_function::Symbol;
     m::Union{Int, Nothing}=nothing,
-    degree::Union{Int, Nothing}=nothing,
+    order::Union{Int, Nothing}=nothing,
     plot_Ihat::Bool=false
 )
     # Since we are differentiating, maybe it is better to write in the original form
@@ -360,7 +364,7 @@ function get_weak_blocks(
 
         # First approximate I
         # So Ihat is Ihat(x) = c0 + c1 * z + c2 * z^2 + c3 * z^3
-        Ihat = build_I_interpolant(t, I_data, method, degree)
+        Ihat = build_I_interpolant(t, I_data, method, order)
 
         if plot_Ihat
             p = plot(
@@ -403,12 +407,16 @@ function get_weak_blocks(
         end
 
     elseif method in ["BSpline_GK"]
-        println("B_Spline interpolation of order $degree")
+        println("B_Spline interpolation of order $order")
 
+        # Order 2: straight-line segments
+        # Order 3: quadratic segments
+        # Order 4: cubic segments
+        # Order 6: quintic segments
         Ihat = BSplineKit.interpolate(
             t,
             I_data,
-            BSplineOrder(degree)
+            BSplineOrder(order)
         )
         if plot_Ihat
             p = plot(
@@ -597,25 +605,28 @@ function weak_block_analysis(
     K::Int,
     method_list::Vector{String},
     testing_function::Symbol;
-    degree::Union{Int, Nothing}=nothing
+    order::Union{Int, Nothing}=nothing
 )
     println("======================================")
     println("Weak block analysis")
     println("K = ", K)
     println("Testing function: $testing_function")
+    print("Time grid: ", t[1])
+    print("-", t[end])
+    println(" dt: ", t[2] - t[1])
     println("======================================")
     for method in method_list
         println()
         println("-------------------------------------")
         if method == "BSpline_GK"
-            if degree === nothing
-                error("[weak_block_analysis] BSpline requires degree")
+            if order === nothing
+                error("[weak_block_analysis] BSpline requires order")
             end
         end
         printstyled("method = ", method, color=:yellow, bold=true)
         println()
 
-        Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function; degree=degree, plot_Ihat=true)
+        Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function; order=order, plot_Ihat=true)
 
         # ------------------------------------------------------------
         # Table 1: actual signed block values
@@ -707,6 +718,90 @@ function best_solution_weak(solution_list::Vector{Vector{Float64}}, Y::Vector, I
 end
 
 
+function select_K_weak(
+    I_data::Vector{Float64},
+    t::Vector{Float64},
+    method::String,
+    testing_function::Symbol,
+    maximum_K::Int,
+    threshold::Float64;
+    m::Union{Int, Nothing}=nothing,
+    order::Union{Int, Nothing}=nothing,
+    minimum_K::Int=3,
+    consecutive::Int=3,
+    if_print::Bool=false
+)
+
+    if !(testing_function in [:sin, :chebyshev_U])
+        """
+        NOTICE: for bump/Hartley/local polynomial functions:
+        the first k functions may? change when total K changes
+        so this exact cutoff method may be not consistent
+        """
+        @warn(
+            "Block-decay K selection assumes a nested ordered family. " *
+            "The selected testing functions may depend on total K."
+        )
+    end
+
+
+    Y, W1, W2, W3 = get_weak_blocks(
+        I_data,
+        t,
+        maximum_K,
+        method,
+        testing_function;
+        m=m,
+        order=order
+    )
+
+    small_count = 0
+
+    for k in 1:maximum_K
+        block_size = maximum(abs, (
+            Y[k],
+            W1[k],
+            W2[k],
+            W3[k]
+        ))
+
+        if block_size <= threshold
+            small_count += 1
+        else
+            small_count = 0
+        end
+
+        if small_count >= consecutive
+            first_small_k = k - consecutive + 1
+
+            # cut off before the small tail
+            K_selected = max(minimum_K, first_small_k - 1)
+
+            if if_print
+                println(
+                    "Selected K = $K_selected; ",
+                    "$consecutive consecutive blocks were below ",
+                    "threshold $threshold starting at k = $first_small_k."
+                )
+            end
+
+            return K_selected
+        end
+    end
+
+    println("Final block values:")
+    println("Y[end]  = ", Y[end])
+    println("W1[end] = ", W1[end])
+    println("W2[end] = ", W2[end])
+    println("W3[end] = ", W3[end])
+
+    error(
+        "Weak blocks did not remain below threshold $threshold " *
+        "for $consecutive consecutive values up to K = $maximum_K."
+    )
+end
+
+
 function select_T_weak(
     I_data::Vector{Float64},
     t::Vector{Float64},
@@ -716,9 +811,9 @@ function select_T_weak(
     m,
     m_min::Int = -6,
     m_max::Int = 6,
-    degree::Int
+    order::Int
 )
-    Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function; m=m, degree=degree)
+    Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function; m=m, order=order)
 
     s = [
         norm(Y),
@@ -753,7 +848,269 @@ function select_T_weak(
 end
 
 
+function select_K_T_weak(
+    I_data::Vector{Float64},
+    t::Vector{Float64},
+    method::String,
+    testing_function::Symbol;
+    order::Int,
+    threshold=1e-2,
+    maximum_K=200
+)
+    """
+    alternatively select T and K, since selecting T requires K, but after time rescaling, the block size will change
+    """
+end
+
+
+
 function HC_LS_weak(
+    t::Vector{Float64},
+    I_data::Vector{Float64},
+    vars::Vector,
+    method::String,
+    testing_function::Symbol;
+    K::Union{Int, Nothing}=nothing,
+    true_vals=Value.true_vals,
+    if_print=true,
+    m=10,
+    order=3,
+    maximum_K::Int=length(t),
+    threshold::Float64=1e-2
+)
+    """
+    YES time rescaling
+    YES auto select K based on a threshold on the block size
+    No complicated projection to bounds after HC
+    Still make initial points in bounds before LS
+    """
+    if K === nothing
+        K = select_K_weak(I_data, t, method, testing_function, maximum_K, threshold; order=order)
+    end
+
+    # Since selecting T requires K, if T >= 1, K selected before is still valid for rescaled blocks
+    # However if T < 1, blocks can be larger than threshold
+    T, _ = select_T_weak(I_data, t, K, method, testing_function; m=m, order=order)
+
+    if T < 1
+        @warn(
+            "Selected T = $T < 1, so time rescaling enlarges the W blocks " *
+            "Rechecking K on the scaled time grid"
+        )
+
+        K = select_K_weak(
+            I_data,
+            t ./ T,
+            method,
+            testing_function;
+            m=m,
+            order=order
+        )
+
+        T, _ = select_T_weak(
+            I_data,
+            t,
+            K,
+            method,
+            testing_function;
+            m=m,
+            order=order
+        )
+    end
+
+    if T < 1
+        # If T < 1 again
+        # Though it should not happen that T < 1 ...
+        error("method needs update because T always < 1")
+    end
+
+
+    t_scaled = t ./ T
+    Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, order=order)
+
+    I0 = I_data[1]
+
+    function model(x, p)
+        return L_hat(p, I0, W1, W2, W3)
+    end
+
+    Lhat = L_hat(vars, I0, W1, W2, W3)
+    J = sum((Lhat .- Y) .^ 2)
+
+    system_eqs = differentiate(J, vars)
+    C = System(system_eqs, variables=vars)
+
+    result = HomotopyContinuation.solve(C, show_progress=false)
+    real_results = real_solutions(result)
+
+    if isempty(real_results)
+        error("No real HC solution found for SIR weak form.")
+    end
+
+    RSS_before = [
+        Logic.get_RSS(Y, L_hat(r, I0, W1, W2, W3))
+        for r in real_results
+    ]
+
+    idx_best_before = argmin(RSS_before)
+    best_result_beforeLS = real_results[idx_best_before]
+
+    final_results_scaled = Vector{Float64}[]
+    RSS_after = Float64[]
+    successful_HC_indices = Int[]
+
+    xdata = collect(1:K)
+    lb_scaled = Logic.to_scaled(Value.lb, T)
+    ub_scaled = Logic.to_scaled(Value.ub, T)
+
+    for (i, r) in enumerate(real_results)
+        p0 = Float64.(r)
+
+        # Make sure the starting point is inside the LS bounds
+        p0 = min.(max.(p0, lb_scaled), ub_scaled)
+
+        try
+            fit = curve_fit(
+                model,
+                xdata,
+                Y,
+                p0;
+                lower = lb_scaled,
+                upper = ub_scaled
+            )
+
+            push!(final_results_scaled, fit.param)
+            push!(RSS_after, Logic.get_RSS(Y, L_hat(fit.param, I0, W1, W2, W3)))
+            push!(successful_HC_indices, i)
+
+        catch e
+            @warn "curve_fit failed for initial point" p0 exception=e
+        end
+    end
+
+    if isempty(final_results_scaled)
+        error("No valid LS-refined solutions found.")
+    end
+
+    idx_best_after_in_final = argmin(RSS_after)
+    idx_best_after_in_HC = successful_HC_indices[idx_best_after_in_final]
+
+    best_result_scaled = final_results_scaled[idx_best_after_in_final]
+    best_result = Logic.to_physical(best_result_scaled, T)
+    RSS = RSS_after[idx_best_after_in_final]
+
+    if idx_best_before in successful_HC_indices
+        pos_before_best_afterLS = findfirst(==(idx_best_before), successful_HC_indices)
+        ideal_best_result = final_results_scaled[pos_before_best_afterLS]
+
+        if idx_best_before != idx_best_after_in_HC
+            printstyled("Best result before and after LS mismatch\n", color = :red, bold = true)
+
+            println("Best HC index before LS: ", idx_best_before)
+            println("Best HC index after LS:  ", idx_best_after_in_HC)
+
+            println("\nBest result before LS:")
+            println(best_result_beforeLS)
+
+            println("\nBest-before-LS result after LS:")
+            println(ideal_best_result)
+            println("RSS after LS from before-best solution: ", RSS_after[pos_before_best_afterLS])
+
+            println("\nBest result after LS:")
+            println(best_result_scaled)
+            println("RSS after LS from after-best solution: ", RSS)
+        end
+    else
+        printstyled("Warning: the best HC solution before LS failed during LS refinement\n", color = :yellow, bold = true)
+        println("Best result before LS: ", best_result_beforeLS)
+    end
+
+    if in_exception(method)
+        B = Logic.get_blocks(I_data, t_scaled, "S")
+    else
+        B = Logic.get_blocks(I_data, t_scaled, method)
+    end
+
+    Ihat_best = Logic.I_hat(best_result_scaled, B...)
+
+    RSS_Ihat_Idata = Logic.get_RSS(Ihat_best, I_data)
+
+    if if_print
+        printstyled("===== HC_LS_weak SIR Results =====\n", color = :magenta, bold = true)
+        println("Selected K factor: ", K)
+        println("Selected time rescale factor: ", T)
+        printstyled("Method used: $method", color= :blue)
+        println()
+        printstyled("Testing function used: $testing_function", color= :blue)
+        println()
+        println("Number of test functions K: ", K)
+
+        println("\nBest parameter estimates:")
+        for (var, val) in zip(vars, best_result)
+            println(var, " = ", val)
+        end
+
+        println("\nResidual sum of squares (RSS_Lhat_L(Y)): ", RSS)
+        println("Residual sum of squares (RSS_Ihat_Idata): ", RSS_Ihat_Idata)
+
+
+        println("RSS weak at best params = ",
+            Logic.get_RSS(Y, L_hat(best_result_scaled, I0, W1, W2, W3))
+        )
+
+        println("pointwise RSS at best weak params = ",
+            Logic.get_RSS(I_data, Logic.I_hat(best_result_scaled, B...))
+        )
+
+        if true_vals !== nothing
+            parameter_err = Logic.get_param_error(best_result, true_vals)
+            println("\nParameter error: ", parameter_err)
+
+            true_scaled = Logic.to_scaled(true_vals, T)
+
+            println("RSS weak at true params = ",
+                Logic.get_RSS(Y, L_hat(true_scaled, I0, W1, W2, W3))
+            )
+
+            println("pointwise RSS at true params = ",
+                Logic.get_RSS(I_data, Logic.I_hat(true_scaled, B...))
+            )
+        end
+
+        println("ALL real results -- #", length(real_results))
+        for r in real_results
+            r_physical = Logic.to_physical(r, T)
+            println("RSS ", Logic.get_RSS(Y, L_hat(r, I0, W1, W2, W3)))
+
+            if true_vals !== nothing
+                println("parameter error ", Logic.get_param_error(r_physical, true_vals))
+            end
+        end
+
+        println("ALL final results -- #", length(final_results_scaled))
+        for r in final_results_scaled
+            if r == best_result_scaled
+                printstyled("best result!\n", color=:yellow)
+            end
+            r_physical = Logic.to_physical(r, T)
+
+            println("RSS ", Logic.get_RSS(Y, L_hat(r, I0, W1, W2, W3)))
+
+            if true_vals !== nothing
+                println("parameter error ", Logic.get_param_error(r_physical, true_vals))
+            end
+        end
+
+    end
+
+    return best_result, RSS, RSS_Ihat_Idata, parameter_err
+end
+
+
+
+
+
+function _HC_LS_weak(
     t::Vector{Float64},
     I_data::Vector{Float64},
     vars::Vector,
@@ -763,16 +1120,16 @@ function HC_LS_weak(
     true_vals=Value.true_vals,
     if_print=true,
     m=10,
-    degree=3
+    order=3
 )
     """
     YES time rescaling
     No complicated projection to bounds after HC
     Still make initial points in bounds before LS
     """
-    T, _ = select_T_weak(I_data, t, K, method, testing_function; m=m, degree=degree)
+    T, _ = select_T_weak(I_data, t, K, method, testing_function; m=m, order=order)
     t_scaled = t ./ T
-    Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, degree=degree)
+    Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, order=order)
 
     I0 = I_data[1]
 
@@ -873,14 +1230,17 @@ function HC_LS_weak(
 
     parameter_err = Logic.get_param_error(best_result, true_vals)
 
-    if if_print
-        if in_exception(method)
-            B = Logic.get_blocks(I_data, t_scaled, "S")
-        else
-            B = Logic.get_blocks(I_data, t_scaled, method)
-        end
-        Ihat_best = Logic.I_hat(best_result_scaled, B...)
+    if in_exception(method)
+        B = Logic.get_blocks(I_data, t_scaled, "S")
+    else
+        B = Logic.get_blocks(I_data, t_scaled, method)
+    end
 
+    Ihat_best = Logic.I_hat(best_result_scaled, B...)
+
+    RSS_Ihat_Idata = Logic.get_RSS(Ihat_best, I_data)
+
+    if if_print
         printstyled("===== HC_LS_weak SIR Results =====\n", color = :magenta, bold = true)
         println("Selected time rescale factor: ", T)
         printstyled("Method used: $method", color= :blue)
@@ -895,7 +1255,7 @@ function HC_LS_weak(
         end
 
         println("\nResidual sum of squares (RSS_Lhat_L(Y)): ", RSS)
-        println("Residual sum of squares (RSS_Ihat_Idata): ", Logic.get_RSS(Ihat_best, I_data))
+        println("Residual sum of squares (RSS_Ihat_Idata): ", RSS_Ihat_Idata)
 
         true_scaled = Logic.to_scaled(true_vals, T)
 
@@ -938,7 +1298,7 @@ function HC_LS_weak(
 
     end
 
-    return best_result, RSS, parameter_err
+    return best_result, RSS, RSS_Ihat_Idata, parameter_err
 end
 
 
@@ -946,7 +1306,7 @@ end
 NOT UPDATED
 This version uses NO time rescaling
 """
-function _HC_LS_weak(
+function __HC_LS_weak(
     t::Vector{Float64},
     I_data::Vector{Float64},
     vars::Vector,

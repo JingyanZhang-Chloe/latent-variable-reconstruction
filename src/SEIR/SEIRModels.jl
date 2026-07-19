@@ -410,7 +410,13 @@ module Logic
 
         best_result_scaled, RSS_Ihat_Idata = best_solution(final_results_scaled, I_data, B..., t_scaled)
         best_result = to_physical(best_result_scaled, T)
-        parameter_err = get_param_error(best_result, true_vals)
+
+        if true_vals !== nothing
+            parameter_err = get_param_error(best_result, true_vals)
+        else
+            parameter_err = nothing
+        end
+
         if I != nothing
             RSS_Idata_I = get_RSS(I_data, I)
         else
@@ -440,7 +446,9 @@ module Logic
 
         println("\nResidual sum of squares (RSS_Ihat_Idata): ", results.RSS_Ihat_Idata)
 
-        println("\nParameter error: ", results.parameter_err)
+        if results.parameter_err !== nothing
+            println("\nParameter error: ", results.parameter_err)
+        end
 
         if results.RSS_Idata_I != nothing
             println("\nBaseline residual sum of squares (RSS_Idata_I): ", results.RSS_Idata_I)
