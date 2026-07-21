@@ -202,8 +202,6 @@ function get_testing_function(t::Vector{Float64}, k::Int, K::Int, testing_functi
 end
 
 
-using QuadGK
-
 function chebyshev_U_Y(
     Ihat,
     t0,
@@ -795,10 +793,12 @@ function select_K_weak(
     println("W2[end] = ", W2[end])
     println("W3[end] = ", W3[end])
 
-    error(
+    @warn(
         "Weak blocks did not remain below threshold $threshold " *
         "for $consecutive consecutive values up to K = $maximum_K."
     )
+
+    return maximum_K
 end
 
 
@@ -875,8 +875,11 @@ function HC_LS_weak(
     if_print=true,
     m=10,
     order=3,
-    maximum_K::Int=length(t),
-    threshold::Float64=1e-2
+    maximum_K::Int=length(t), # N datapoints -> N dimentional vector space
+    threshold::Float64=1e-2,
+    compare_LS::Bool=false,
+    perturb::Float64=0.20, # 20% perturb on true param as initial guess of LS
+    LS_iter::Int=5
 )
     """
     YES time rescaling
@@ -930,7 +933,9 @@ function HC_LS_weak(
 
     I0 = I_data[1]
 
+    iteration_counts = 0
     function model(x, p)
+        iteration_counts += 1
         return L_hat(p, I0, W1, W2, W3)
     end
 
@@ -958,6 +963,7 @@ function HC_LS_weak(
     final_results_scaled = Vector{Float64}[]
     RSS_after = Float64[]
     successful_HC_indices = Int[]
+    iteration_count_list = Int[]
 
     xdata = collect(1:K)
     lb_scaled = Logic.to_scaled(Value.lb, T)
@@ -970,6 +976,7 @@ function HC_LS_weak(
         p0 = min.(max.(p0, lb_scaled), ub_scaled)
 
         try
+            iteration_counts = 0
             fit = curve_fit(
                 model,
                 xdata,
@@ -982,6 +989,7 @@ function HC_LS_weak(
             push!(final_results_scaled, fit.param)
             push!(RSS_after, Logic.get_RSS(Y, L_hat(fit.param, I0, W1, W2, W3)))
             push!(successful_HC_indices, i)
+            push!(iteration_count_list, iteration_counts)
 
         catch e
             @warn "curve_fit failed for initial point" p0 exception=e
@@ -1037,6 +1045,7 @@ function HC_LS_weak(
 
     if if_print
         printstyled("===== HC_LS_weak SIR Results =====\n", color = :magenta, bold = true)
+        printstyled("----------------------------------\n", color = :blue)
         println("Selected K factor: ", K)
         println("Selected time rescale factor: ", T)
         printstyled("Method used: $method", color= :blue)
@@ -1044,6 +1053,7 @@ function HC_LS_weak(
         printstyled("Testing function used: $testing_function", color= :blue)
         println()
         println("Number of test functions K: ", K)
+        printstyled("----------------------------------\n", color = :blue)
 
         println("\nBest parameter estimates:")
         for (var, val) in zip(vars, best_result)
@@ -1051,60 +1061,118 @@ function HC_LS_weak(
         end
 
         println("\nResidual sum of squares (RSS_Lhat_L(Y)): ", RSS)
-        println("Residual sum of squares (RSS_Ihat_Idata): ", RSS_Ihat_Idata)
 
 
-        println("RSS weak at best params = ",
-            Logic.get_RSS(Y, L_hat(best_result_scaled, I0, W1, W2, W3))
-        )
-
-        println("pointwise RSS at best weak params = ",
-            Logic.get_RSS(I_data, Logic.I_hat(best_result_scaled, B...))
+        printstyled("----------------------------------\n", color = :blue)
+        RSS_Ihat_Idata_param = Logic.get_RSS(I_data, Logic.I_hat(best_result_scaled, B...))
+        println("RSS_Ihat_Idata at best weak params = ",
+            RSS_Ihat_Idata_param
         )
 
         if true_vals !== nothing
-            parameter_err = Logic.get_param_error(best_result, true_vals)
-            println("\nParameter error: ", parameter_err)
-
             true_scaled = Logic.to_scaled(true_vals, T)
 
-            println("RSS weak at true params = ",
-                Logic.get_RSS(Y, L_hat(true_scaled, I0, W1, W2, W3))
+            RSS_Ihat_Idata_true = Logic.get_RSS(I_data, Logic.I_hat(true_scaled, B...))
+            println("RSS_Ihat_Idata at true params = ",
+                RSS_Ihat_Idata_true
             )
 
-            println("pointwise RSS at true params = ",
-                Logic.get_RSS(I_data, Logic.I_hat(true_scaled, B...))
-            )
+            if RSS_Ihat_Idata_param < RSS_Ihat_Idata_true
+                printstyled("RSS Consistent!\n", color = :red)
+            else
+                printstyled("RSS NOT Consistent!\n", color = :red)
+            end
+
+            parameter_err = Logic.get_param_error(best_result, true_vals)
+            println("\nParameter error: ", parameter_err)
         end
+        printstyled("----------------------------------\n", color = :blue)
 
-        println("ALL real results -- #", length(real_results))
+        println("\nALL real results -- #", length(real_results))
         for r in real_results
+            printstyled("------------\n", color = :blue)
             r_physical = Logic.to_physical(r, T)
-            println("RSS ", Logic.get_RSS(Y, L_hat(r, I0, W1, W2, W3)))
+            println("RSS_Ihat_Idata ", Logic.get_RSS(I_data, Logic.I_hat(r, B...)))
 
             if true_vals !== nothing
                 println("parameter error ", Logic.get_param_error(r_physical, true_vals))
             end
+
+            printstyled("------------\n", color = :blue)
         end
 
-        println("ALL final results -- #", length(final_results_scaled))
-        for r in final_results_scaled
+        println("\nALL final results -- #", length(final_results_scaled))
+        for (ind, r) in enumerate(final_results_scaled)
+            printstyled("------------\n", color = :blue)
+
             if r == best_result_scaled
                 printstyled("best result!\n", color=:yellow)
             end
             r_physical = Logic.to_physical(r, T)
 
-            println("RSS ", Logic.get_RSS(Y, L_hat(r, I0, W1, W2, W3)))
+            iter_r = iteration_count_list[ind]
+            println("model evaluations = ", iter_r)
+            println("RSS_Ihat_Idata ", Logic.get_RSS(I_data, Logic.I_hat(r, B...)))
 
             if true_vals !== nothing
                 println("parameter error ", Logic.get_param_error(r_physical, true_vals))
             end
+            printstyled("------------\n", color = :blue)
         end
 
     end
 
+
+    if compare_LS
+        if true_vals === nothing
+            error("Comparing with pure LS method requires true vals as reference")
+        end
+
+        printstyled("------------ Comparison with LS\n", color = :blue)
+
+        for i in 1:LS_iter
+            initial = true_vals .+ perturb .* true_vals .* randn(length(true_vals))
+
+            # Make sure the starting point is inside the LS bounds
+            initial = min.(max.(initial, lb_scaled), ub_scaled)
+
+            try
+                iteration_counts = 0
+                fit = curve_fit(
+                    model,
+                    xdata,
+                    Y,
+                    initial;
+                    lower = lb_scaled,
+                    upper = ub_scaled
+                )
+
+                printstyled("------------\n", color = :blue)
+                println("$i-th LS with initial guess $initial")
+                println("model evaluations = ", iteration_counts)
+                println("RSS_Ihat_Idata ", Logic.get_RSS(I_data, Logic.I_hat(fit.param, B...)))
+                printstyled("------------\n", color = :blue)
+                println()
+            catch e
+                @warn "curve_fit failed for initial point" initial exception=e
+            end
+        end
+    end
+
     return best_result, RSS, RSS_Ihat_Idata, parameter_err
 end
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
