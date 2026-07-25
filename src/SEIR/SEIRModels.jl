@@ -436,7 +436,7 @@ module Logic
 
     function print_HC_LS(results::NamedTuple)
 
-        println("=== HC_LS SEIR Results ===")
+        printstyled("===== HC_LS SEIR Results =====\n", color = :magenta, bold = true)
         println("Method used: ", results.method)
 
         println("\nBest parameter estimates:")

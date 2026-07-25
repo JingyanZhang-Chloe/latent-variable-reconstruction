@@ -1,4 +1,4 @@
-# wake_form.jl
+# weak_form.jl
 # Julia Script
 
 #=
@@ -57,10 +57,27 @@ function get_weak_blocks(
 
     if method in ["QSpline_GK", "CSpline_GK", "Akima_GK"]
 
-        Ihat = build_I_interpolant(t, I_data, method, order)
-        F(x) = DataInterpolations.integral(Ihat, t0, x)
-        G(x) = DataInterpolations.integral(Ihat^2, t0, x)
+        Ihat = build_I_interpolant(t, I_data, method; order=order)
 
+        # F_values = Integrate.integrate(t, I_data, "S")
+        # G_values = Integrate.integrate(t, I_data.^2, "S")
+
+        # Issue: hang for a very long time
+        # F(x) = DataInterpolations.integral(Ihat, t0, x)
+        # G(x) = quadgk(s -> Ihat(s)^2, t0, x)[1]
+
+        F_values = [
+            DataInterpolations.integral(Ihat, t0, x)
+            for x in t
+        ]
+
+        G_values = [
+            quadgk(s -> Ihat(s)^2, t0, x)[1]
+            for x in t
+        ]
+
+        Fhat = build_I_interpolant(t, F_values, method; order=order)
+        Ghat = build_I_interpolant(t, G_values, method; order=order)
 
         for k in 1:K
             # General weak LHS, including boundary term
@@ -71,15 +88,15 @@ function get_weak_blocks(
                 Y[k] = chebyshev_U_Y(Ihat, t0, tT, k)
             else
                 boundary = phi(tT) * I_data[end] - phi(t0) * I_data[1]
-                Y[k] = boundary - quadgk(x -> dphi(x) * Ihat(x), t)[1]
+                Y[k] = boundary - quadgk(x -> dphi(x) * Ihat(x), t0, tT)[1]
             end
 
-            W1[k] = quadgk(x -> phi(x), t)[1]
-            W2[k] = quadgk(x -> phi(x) * Ihat(x), t)[1]
-            W3[k] = quadgk(x -> phi(x) * (Ihat(x)^2 - I0^2), t)[1]
-            W4[k] = quadgk(x -> phi(x) * F(x), t)[1]
-            W5[k] = quadgk(x -> phi(x) * G(x), t)[1]
-            W6[k] = quadgk(x -> phi(x) * F(x)^2, t)[1]
+            W1[k] = quadgk(x -> phi(x), t0, tT)[1]
+            W2[k] = quadgk(x -> phi(x) * Ihat(x), t0, tT)[1]
+            W3[k] = quadgk(x -> phi(x) * (Ihat(x)^2 - I0^2), t0, tT)[1]
+            W4[k] = quadgk(x -> phi(x) * Fhat(x), t0, tT)[1]
+            W5[k] = quadgk(x -> phi(x) * Ghat(x), t0, tT)[1]
+            W6[k] = quadgk(x -> phi(x) * Fhat(x)^2, t0, tT)[1]
         end
 
     else
@@ -92,16 +109,60 @@ function get_weak_blocks(
 
             Y[k]  = - Integrate.integrate(t, dphi .* I_data, method)[end]
 
-            W1[k] = Integrate.integrate(t, phi)[end]
-            W2[k] = Integrate.integrate(t, phi .* I_data)[end]
-            W3[k] = Integrate.integrate(t, phi .* (I_data.^2 .- I0^2))[end]
-            W4[k] = Integrate.integrate(t, phi .* F)[end]
-            W5[k] = Integrate.integrate(t, phi .* G)[end]
-            W6[k] = Integrate.integrate(t, phi .* (F.^2))[end]
+            W1[k] = Integrate.integrate(t, phi, method)[end]
+            W2[k] = Integrate.integrate(t, phi .* I_data, method)[end]
+            W3[k] = Integrate.integrate(t, phi .* (I_data.^2 .- I0^2), method)[end]
+            W4[k] = Integrate.integrate(t, phi .* F, method)[end]
+            W5[k] = Integrate.integrate(t, phi .* G, method)[end]
+            W6[k] = Integrate.integrate(t, phi .* (F.^2), method)[end]
         end
     end
 
     return Y, W1, W2, W3, W4, W5, W6
+end
+
+
+function get_blocks(
+    I_data::Vector{Float64},
+    t::Vector{Float64},
+    method::String
+)
+    t0 = t[1]
+
+    if !(in_exception(method))
+        I0 = I_data[1]
+
+        B1 = 1
+        B2 = Integrate.integrate(t, I_data, method)
+        B3 = Integrate.integrate(t, I_data.^2 .- I0^2, method)
+        B4 = t .* B2 .- Integrate.integrate(t, t .* I_data, method)
+        B5 = t .* Integrate.integrate(t, I_data.^2, method) .- Integrate.integrate(t, t .* (I_data.^2), method)
+        B6 = Integrate.integrate(t, (B2).^2, method)
+
+        return I0, B1, B2, B3, B4, B5, B6
+
+    elseif method in ["QSpline_GK", "CSpline_GK", "Akima_GK"]
+        Ihat = build_I_interpolant(t, I_data, method)
+        I0 = Ihat(t0)
+
+        B1 = 1
+        B2 = [DataInterpolations.integral(Ihat, t0, x) for x in t]
+        B3 = [quadgk(s -> (Ihat(s)^2 - I0^2), t0, x)[1] for x in t]
+        B4 = t .* B2 .- [quadgk(s -> (s * Ihat(s)), t0, x)[1] for x in t]
+        B5 = t .* [quadgk(s -> (Ihat(s)^2), t0, x)[1] for x in t] .- [quadgk(s -> (s * Ihat(s)^2), t0, x)[1] for x in t]
+
+        # TODO: Check these two approaches
+        # F(x) = DataInterpolations.integral(Ihat, t0, x)
+        # B6 = [quadgk(s -> (F(s)^2), t0, x)[1] for x in t]
+
+        B2hat = build_I_interpolant(t, B2, method)
+        B6 = [quadgk(s -> B2hat(s)^2, t0, x)[1] for x in t]
+
+        return I0, B1, B2, B3, B4, B5, B6
+
+    else
+        error("Unknown integration method $method")
+    end
 end
 
 
@@ -125,24 +186,6 @@ function L_hat(paras, I0, W1, W2, W3, W4, W5, W6)
 
     # Here we dont have I0 anymore? (since we do differentiate and then integrate)
     return C1 .+ C2 .+ C3 .+ C4 .+ C5 .+ C6
-end
-
-
-function best_solution_weak(solution_list::Vector{Vector{Float64}}, Y::Vector, I0, W1, W2, W3, W4, W5, W6)
-    best_sol = Float64[]
-    best_err = Inf
-
-    for param in solution_list
-        Lhat = L_hat(param, I0, W1, W2, W3, W4, W5, W6)
-        err = Logic.get_RSS(Lhat, Y)
-
-        if err <= best_err
-            best_err = err
-            best_sol = param
-        end
-    end
-
-    return best_sol, best_err
 end
 
 
@@ -225,6 +268,9 @@ function select_K_weak(
     println("W1[end] = ", W1[end])
     println("W2[end] = ", W2[end])
     println("W3[end] = ", W3[end])
+    println("W4[end] = ", W4[end])
+    println("W5[end] = ", W5[end])
+    println("W6[end] = ", W6[end])
 
     @warn(
         "Weak blocks did not remain below threshold $threshold " *
@@ -284,6 +330,99 @@ function select_T_weak(
 end
 
 
+struct RootRecord
+    index::Int
+
+    # HC
+    hc_root::Vector{Float64}
+    hc_rss::Float64
+
+    # clipping information
+    clipped::Bool
+    clipped_root::Vector{Float64}
+
+    # LS stage
+    ls_success::Bool
+    ls_root::Union{Vector{Float64}, Nothing}
+    ls_rss::Union{Float64, Nothing}
+    ls_iterations::Union{Int, Nothing}
+
+    # if LS failed
+    error_message::Union{String, Nothing}
+end
+
+
+function RootRecord(;
+    index,
+    hc_root,
+    hc_rss,
+    clipped,
+    clipped_root,
+    ls_success,
+    ls_root=nothing,
+    ls_rss=nothing,
+    ls_iterations=nothing,
+    error_message=nothing
+)
+    return RootRecord(
+        index,
+        hc_root,
+        hc_rss,
+        clipped,
+        clipped_root,
+        ls_success,
+        ls_root,
+        ls_rss,
+        ls_iterations,
+        error_message
+    )
+end
+
+
+function print_root_info(r::RootRecord)
+
+    println("======================================")
+    println("Root #$(r.index)")
+    println("======================================")
+
+    println("HC result:")
+    println("  params = ", r.hc_root)
+    println("  RSS    = ", r.hc_rss)
+
+    println()
+
+    println("Clipping:")
+    println("  happened = ", r.clipped)
+
+    if r.clipped
+        println("  before = ", r.hc_root)
+        println("  after  = ", r.clipped_root)
+    end
+
+    println()
+
+    println("LS result:")
+    println("  success = ", r.ls_success)
+
+    if r.ls_success
+        println("  params = ", r.ls_root)
+        println("  RSS    = ", r.ls_rss)
+        println("  iterations = ", r.ls_iterations)
+
+        println()
+
+        println("Improvement:")
+        println("  ΔRSS = ", r.hc_rss - r.ls_rss)
+
+    else
+        println("  FAILED")
+        println("  error = ", r.error_message)
+    end
+
+    println()
+end
+
+
 function HC_LS_weak(
     t::Vector{Float64},
     I_data::Vector{Float64},
@@ -297,6 +436,7 @@ function HC_LS_weak(
     order=3,
     maximum_K::Int=length(t), # N datapoints -> N dimentional vector space
     threshold::Float64=1e-2,
+    print_root_record::Bool=true,
     compare_LS::Bool=false,
     perturb::Float64=0.20, # 20% perturb on true param as initial guess of LS
     LS_iter::Int=5
@@ -350,13 +490,14 @@ function HC_LS_weak(
 
     t_scaled = t ./ T
     Y, W1, W2, W3, W4, W5, W6 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, order=order)
+    B = get_blocks(I_data, t_scaled, method)
 
     I0 = I_data[1]
 
     iteration_counts = 0
     function model(x, p)
         iteration_counts += 1
-        return L_hat(p, I0, W1, W2, W3, W4, W5, W6)
+        return Logic.I_hat(p, B..., x)
     end
 
     Lhat = L_hat(vars, I0, W1, W2, W3, W4, W5, W6)
@@ -372,96 +513,100 @@ function HC_LS_weak(
         error("No real HC solution found for SEIR weak form.")
     end
 
-    RSS_before = [
-        Logic.get_RSS(Y, L_hat(r, I0, W1, W2, W3, W4, W5, W6))
-        for r in real_results
-    ]
-
-    idx_best_before = argmin(RSS_before)
-    best_result_beforeLS = real_results[idx_best_before]
-
-    final_results_scaled = Vector{Float64}[]
-    RSS_after = Float64[]
-    successful_HC_indices = Int[]
-    iteration_count_list = Int[]
-
-    xdata = collect(1:K)
     lb_scaled = Logic.to_scaled(Value.lb, T)
     ub_scaled = Logic.to_scaled(Value.ub, T)
 
+    records = RootRecord[]
+
+    final_results_scaled = Union{Vector{Float64}, Nothing}[]
+    final_results_scaled_empty = true
+
+    hc_rss_list = Float64[]
+    ls_rss_list = Float64[]
+
     for (i, r) in enumerate(real_results)
-        p0 = Float64.(r)
+        hc_root = Float64.(r)
+        hc_rss = Logic.get_RSS(I_data, Logic.I_hat(r, B..., t_scaled))
+        push!(hc_rss_list, hc_rss)
 
         # Make sure the starting point is inside the LS bounds
-        p0 = min.(max.(p0, lb_scaled), ub_scaled)
+        clipped_root = min.(max.(hc_root, lb_scaled), ub_scaled)
+
+        clipped = clipped_root != hc_root
 
         try
             iteration_counts = 0
             fit = curve_fit(
                 model,
-                xdata,
-                Y,
-                p0;
+                t_scaled,
+                I_data,
+                clipped_root;
                 lower = lb_scaled,
                 upper = ub_scaled
             )
 
-            push!(final_results_scaled, fit.param)
-            push!(RSS_after, Logic.get_RSS(Y, L_hat(fit.param, I0, W1, W2, W3, W4, W5, W6)))
-            push!(successful_HC_indices, i)
-            push!(iteration_count_list, iteration_counts)
+            ls_root = fit.param
+            ls_rss = Logic.get_RSS(I_data, Logic.I_hat(ls_root, B..., t_scaled))
+
+            record = RootRecord(
+                index = i,
+                hc_root = hc_root,
+                hc_rss = hc_rss,
+
+                clipped = clipped,
+                clipped_root = clipped_root,
+
+                ls_success = true,
+                ls_root = ls_root,
+                ls_rss = ls_rss,
+                ls_iterations = iteration_counts,
+
+                error_message = nothing
+            )
+
+            push!(final_results_scaled, ls_root)
+            push!(ls_rss_list, ls_rss)
+            push!(records, record)
+
+            final_results_scaled_empty = false
 
         catch e
-            @warn "curve_fit failed for initial point" p0 exception=e
+            record = RootRecord(
+                index = i,
+                hc_root = hc_root,
+                hc_rss = hc_rss,
+
+                clipped = clipped,
+                clipped_root = clipped_root,
+
+                ls_success = false,
+                ls_root = nothing,
+                ls_rss = nothing,
+                ls_iterations = nothing,
+
+                error_message = e
+            )
+
+            push!(final_results_scaled, nothing)
+            push!(ls_rss_list, Inf)
+            push!(records, record)
         end
     end
 
-    if isempty(final_results_scaled)
+    if final_results_scaled_empty
         error("No valid LS-refined solutions found.")
     end
 
-    idx_best_after_in_final = argmin(RSS_after)
-    idx_best_after_in_HC = successful_HC_indices[idx_best_after_in_final]
+    hc_best_index = argmin(hc_rss_list)
+    ls_best_index = argmin(ls_rss_list)
 
-    best_result_scaled = final_results_scaled[idx_best_after_in_final]
+    if hc_best_index != ls_best_index
+        @warn "Best result before and after LS mismatch \n HC best index: $hc_best_index \n LS best index: $ls_best_index"
+    end
+
+    best_result_scaled = final_results_scaled[ls_best_index]
     best_result = Logic.to_physical(best_result_scaled, T)
-    RSS = RSS_after[idx_best_after_in_final]
-
-    if idx_best_before in successful_HC_indices
-        pos_before_best_afterLS = findfirst(==(idx_best_before), successful_HC_indices)
-        ideal_best_result = final_results_scaled[pos_before_best_afterLS]
-
-        if idx_best_before != idx_best_after_in_HC
-            printstyled("Best result before and after LS mismatch\n", color = :red, bold = true)
-
-            println("Best HC index before LS: ", idx_best_before)
-            println("Best HC index after LS:  ", idx_best_after_in_HC)
-
-            println("\nBest result before LS:")
-            println(best_result_beforeLS)
-
-            println("\nBest-before-LS result after LS:")
-            println(ideal_best_result)
-            println("RSS after LS from before-best solution: ", RSS_after[pos_before_best_afterLS])
-
-            println("\nBest result after LS:")
-            println(best_result_scaled)
-            println("RSS after LS from after-best solution: ", RSS)
-        end
-    else
-        printstyled("Warning: the best HC solution before LS failed during LS refinement\n", color = :yellow, bold = true)
-        println("Best result before LS: ", best_result_beforeLS)
-    end
-
-    if in_exception(method)
-        B = Logic.get_blocks(I_data, t_scaled, "S")
-    else
-        B = Logic.get_blocks(I_data, t_scaled, method)
-    end
-
-    Ihat_best = Logic.I_hat(best_result_scaled, B...)
-
-    RSS_Ihat_Idata = Logic.get_RSS(Ihat_best, I_data)
+    RSS_Ihat_Idata = ls_rss_list[ls_best_index]
 
     if if_print
         printstyled("===== HC_LS_weak SEIR Results =====\n", color = :magenta, bold = true)
@@ -480,24 +625,20 @@ function HC_LS_weak(
             println(var, " = ", val)
         end
 
-        println("\nResidual sum of squares (RSS_Lhat_L(Y)): ", RSS)
-
-
         printstyled("----------------------------------\n", color = :blue)
-        RSS_Ihat_Idata_param = Logic.get_RSS(I_data, Logic.I_hat(best_result_scaled, B...))
         println("RSS_Ihat_Idata at best weak params = ",
-            RSS_Ihat_Idata_param
+            RSS_Ihat_Idata
         )
 
         if true_vals !== nothing
             true_scaled = Logic.to_scaled(true_vals, T)
 
-            RSS_Ihat_Idata_true = Logic.get_RSS(I_data, Logic.I_hat(true_scaled, B...))
+            RSS_Ihat_Idata_true = Logic.get_RSS(I_data, Logic.I_hat(true_scaled, B..., t_scaled))
             println("RSS_Ihat_Idata at true params = ",
                 RSS_Ihat_Idata_true
             )
 
-            if RSS_Ihat_Idata_param < RSS_Ihat_Idata_true
+            if RSS_Ihat_Idata < RSS_Ihat_Idata_true
                 printstyled("RSS Consistent!\n", color = :red)
             else
                 printstyled("RSS NOT Consistent!\n", color = :red)
@@ -506,41 +647,48 @@ function HC_LS_weak(
             parameter_err = Logic.get_param_error(best_result, true_vals)
             println("\nParameter error: ", parameter_err)
         end
-        printstyled("----------------------------------\n", color = :blue)
-
-        println("\nALL real results -- #", length(real_results))
-        for r in real_results
-            printstyled("------------\n", color = :blue)
-            r_physical = Logic.to_physical(r, T)
-            println("RSS_Ihat_Idata ", Logic.get_RSS(I_data, Logic.I_hat(r, B...)))
-
-            if true_vals !== nothing
-                println("parameter error ", Logic.get_param_error(r_physical, true_vals))
-            end
-
-            printstyled("------------\n", color = :blue)
-        end
-
-        println("\nALL final results -- #", length(final_results_scaled))
-        for (ind, r) in enumerate(final_results_scaled)
-            printstyled("------------\n", color = :blue)
-
-            if r == best_result_scaled
-                printstyled("best result!\n", color=:yellow)
-            end
-            r_physical = Logic.to_physical(r, T)
-
-            iter_r = iteration_count_list[ind]
-            println("model evaluations = ", iter_r)
-            println("RSS_Ihat_Idata ", Logic.get_RSS(I_data, Logic.I_hat(r, B...)))
-
-            if true_vals !== nothing
-                println("parameter error ", Logic.get_param_error(r_physical, true_vals))
-            end
-            printstyled("------------\n", color = :blue)
-        end
-
     end
+
+
+    if print_root_record
+        printstyled("------------ Root records\n", color = :blue)
+
+        for record in records
+            print_root_info(record)
+        end
+    end
+
+#        println("\nALL real results -- #", length(real_results))
+#        for r in real_results
+#            printstyled("------------\n", color = :blue)
+#            r_physical = Logic.to_physical(r, T)
+#            println("RSS_Ihat_Idata ", Logic.get_RSS(I_data, Logic.I_hat(r, B..., t_scaled)))
+#
+#            if true_vals !== nothing
+#                println("parameter error ", Logic.get_param_error(r_physical, true_vals))
+#            end
+#
+#            printstyled("------------\n", color = :blue)
+#        end
+#
+#        println("\nALL final results -- #", length(final_results_scaled))
+#        for (ind, r) in enumerate(final_results_scaled)
+#            printstyled("------------\n", color = :blue)
+#
+#            if r == best_result_scaled
+#                printstyled("best result!\n", color=:yellow)
+#            end
+#            r_physical = Logic.to_physical(r, T)
+#
+#            iter_r = iteration_count_list[ind]
+#            println("model evaluations = ", iter_r)
+#            println("RSS_Ihat_Idata ", Logic.get_RSS(I_data, Logic.I_hat(r, B..., t_scaled)))
+#
+#            if true_vals !== nothing
+#                println("parameter error ", Logic.get_param_error(r_physical, true_vals))
+#            end
+#            printstyled("------------\n", color = :blue)
+#        end
 
 
     if compare_LS
@@ -560,8 +708,8 @@ function HC_LS_weak(
                 iteration_counts = 0
                 fit = curve_fit(
                     model,
-                    xdata,
-                    Y,
+                    t_scaled,
+                    I_data,
                     initial;
                     lower = lb_scaled,
                     upper = ub_scaled
@@ -570,7 +718,7 @@ function HC_LS_weak(
                 printstyled("------------\n", color = :blue)
                 println("$i-th LS with initial guess $initial")
                 println("model evaluations = ", iteration_counts)
-                println("RSS_Ihat_Idata ", Logic.get_RSS(I_data, Logic.I_hat(fit.param, B...)))
+                println("RSS_Ihat_Idata ", Logic.get_RSS(I_data, Logic.I_hat(fit.param, B..., t_scaled)))
                 printstyled("------------\n", color = :blue)
                 println()
             catch e
@@ -579,5 +727,5 @@ function HC_LS_weak(
         end
     end
 
-    return best_result, RSS, RSS_Ihat_Idata, parameter_err
+    return best_result, RSS_Ihat_Idata, parameter_err
 end
