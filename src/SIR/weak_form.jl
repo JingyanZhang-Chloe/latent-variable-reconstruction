@@ -9,6 +9,7 @@ Date: 22/06/2026
 
 include("SIRModels.jl")
 include("../Measure.jl")
+include("../weak_form_helper.jl")
 
 using .Value
 using .Logic
@@ -23,277 +24,7 @@ using QuadGK
 using DataInterpolations
 using Plots
 using BSplineKit
-
-
-function in_exception(me::String)
-    return (me in ["S_improved", "S_formula_improved", "QSpline_GK", "CSpline_GK", "Akima_GK", "Qspline_exact", "CSpine_exact", "Akima_exact", "BSpline_GK"])
-end
-
-
-function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method::String, order::Int)
-    if method in ["QSpline_GK", "Qspline_exact"]
-        return QuadraticSpline(I_data, t)
-
-    elseif method in ["CSpline_GK", "CSpine_exact"]
-        return CubicSpline(I_data, t)
-
-    elseif method in ["Akima_GK", "Akima_exact"]
-        return AkimaInterpolation(I_data, t)
-
-    elseif method in ["BSpline_GK"]
-        if order === nothing
-            error("B_Spline requires interpolation order")
-        end
-
-        B = BSplineInterpolation(I_data, t, order, :ArcLen, :Average)
-        return B
-    else
-        error("Unknown spline-GK method: $method")
-    end
-end
-
-
-# ======================================================== For Spline_exact
-function local_poly_coeffs(Ihat, a, b, degree::Int)
-    """
-    QSpline has degree 2
-    CSpline and Akima have degree 3 (since C2)
-
-    We are storing the coefficients of q(z)
-    Then Ihat in [a, b] => Ihat(x) = q(x-m)
-    """
-
-    m = (a + b) / 2
-    h = (b - a) / 2
-
-    c0 = Ihat(m)
-    c1 = DataInterpolations.derivative(Ihat, m, 1)
-    c2 = 0.5 * DataInterpolations.derivative(Ihat, m, 2)
-
-    if degree == 2
-        return [c0, c1, c2, 0], m
-    elseif degree == 3
-        c3 = (Ihat(b) - Ihat(a) - 2 * c1 * h) / 2 * h^3
-
-        return [c0, c1, c2, c3], m
-    else
-        error("Only degree 2 or 3 supported for now")
-    end
-end
-
-
-function poly_mul(p_coeffs::Vector{Float64}, q_coeffs::Vector{Float64})
-    """
-    Multiply two polynomials, given their coefficients as Vector
-    Return the resulting polynomial coefficients Vector
-    """
-    r = zeros(Float64, length(p_coeffs) + length(q_coeffs) - 1)
-
-    for i in eachindex(p_coeffs)
-        for j in eachindex(q_coeffs)
-            r[i + j - 1] += p_coeffs[i] * q_coeffs[j]
-        end
-    end
-
-    return r
-end
-
-
-function get_F_coeffs(qcoeffs::Vector{Float64}, h, Fa)
-    """
-    Giving the coeff of Ihat, compute on the interval [a, b]
-    F = ∫ Ihat(s) ds
-    Return the coefficients Vector of F, since it is also a polynomial
-    Assuming we know F(a)
-
-    F(s) = ∫_a^s Ihat(x)dx
-    => (z = x - m) recall m = a+b/2 and h = b-a/2
-    F(s) = ∫_(a-m)^(s-m) [c0 + c1 z + c2 z^2 + c3 z^3] dz
-    =>
-    F(s) = ∫_(-h)^(s-m) [c0 + c1 z + c2 z^2 + c3 z^3] dz
-    """
-
-    deg = length(qcoeffs) - 1
-    Fcoeffs = zeros(Float64, deg + 2)
-
-    Fcoeffs[1] = Fa
-    for n in 0:deg
-        # For each term of q --- c_n * z^n --- integrate: c_n 1/n+1 * ((s-m)^(n+1) - (-h)^(n+1))
-        # If we do u = s-m
-        # So F(s) = F(u + m) = ~F(u) = poly we are computing rn
-        # So we have a constant term: - c_n * 1/n+1 * (-h)^(n+1)
-        # And a z^(n+1) term with coeff: c_n * 1/n+1
-        c = qcoeffs[n + 1]
-
-        # constant part from - c * (-h)^(n+1)/(n+1)
-        Fcoeffs[1] -= c * (-h)^(n + 1) / (n + 1)
-
-        # coefficient of z^(n+1)
-        Fcoeffs[n + 2] += c / (n + 1)
-    end
-
-    return Fcoeffs
-end
-
-
-function cumulative_F(Fa, a, b)
-    """
-    Compute F(b)
-    """
-end
-
-
-function trig_moments(n, basis::Symbol, a, b)
-    """
-    Compute ∫ z^n sin or ∫ z^n cos
-    """
-end
-# ========================================================
-
-
-
-
-function get_testing_function(t::Vector{Float64}, k::Int, K::Int, testing_function::Symbol, if_function::Bool=true; m::Union{Int, Nothing})
-    if testing_function == :sin
-        if if_function
-            phi, dphi = Measure.measure_sine_function(t, k)
-        else
-            phi, dphi = Measure.measure_sine(t, k)
-        end
-
-    elseif testing_function == :bump
-        if if_function
-            phi, dphi, _ = Measure.measure_bump_function(t, k, K)
-        else
-            phi, dphi, _ = Measure.measure_bump(t, k, K)
-        end
-
-    elseif testing_function == :hartley
-        if if_function
-            phi, dphi, _ = Measure.measure_hartley_function(t, k, K)
-        else
-            phi, dphi, _ = Measure.measure_hartley(t, k, K)
-        end
-
-    elseif testing_function == :polynomial
-        if m === nothing
-            error("Polynomial test functions require degree m")
-        end
-
-        if if_function
-            phi, dphi, _ = Measure.measure_polynomial_function(t, k, K, m)
-        else
-            phi, dphi, _ = Measure.measure_polynomial(t, k, K, m)
-        end
-
-    elseif testing_function == :chebyshev_T
-        error("boundary issue")
-
-    elseif testing_function == :chebyshev_U
-        if if_function
-            phi, dphi = Measure.chebyshev_U_function(t, k)
-        else
-            phi, dphi = Measure.chebyshev_U(t, k)
-        end
-
-    else
-        error("not implemented yet heihei")
-    end
-end
-
-
-function chebyshev_U_Y(
-    Ihat,
-    t0,
-    tT,
-    k
-)
-    """
-    This is for IHAT is a FUNCTION!
-
-    Y = boundary - quadgk(x -> dphi(x) * Ihat(x), t)[1]
-
-    If chebyshev U, then we know phi(-1) = phi(1) = 0, boundary = 0
-    Y = - quadgk(x -> dphi(x) * Ihat(x), t)[1]
-
-    change of variable x = cosθ
-    Then ∫ from π to 0
-    θ = π corresponds to t0
-    θ = 0 corresponds to tT
-
-    x(t) = (2t-(t0+tT))/(tT-t0)
-    t(θ) = [cosθ (tT - t0) + (t0 + tT)] / 2
-    x(t(θ)) = cosθ
-
-    Since phi(t) = sin((k+1)*acos(x(t)))
-    phi(t(θ)) = sin((k+1)θ)
-
-    dphi(t(θ)) = dphi/dt (t(θ))
-    We have dphi/dθ = (k+1)cos((k+1)θ)
-    by chain rule dphi(t(θ)) = dphi/dt (t(θ)) = dphi/dθ * dθ/dt = (k+1)cos((k+1)θ) * - 2/Lsinθ
-    dt = - Lsinθ/2 dθ
-
-    Hence the integral Y = - quadgk(x -> dphi(x) * Ihat(x), t)[1]
-    ==> Y = - quadgk(θ -> Ihat(x) * {[(k+1)cos((k+1)θ) * - 2/Lsinθ] * - Lsinθ/2}, π, 0)
-    ==> Y = quadgk(θ -> Ihat(x) * {(k+1)cos((k+1)θ)}, 0, π)
-    """
-    L = tT - t0
-
-    t_from_theta(θ) =
-        (t0 + tT) / 2 + (L / 2) * cos(θ)
-
-    m = k
-
-    return m * quadgk(
-        θ -> Ihat(t_from_theta(θ)) * cos(m * θ),
-        0,
-        π
-    )[1]
-end
-
-
-function chebyshev_U_Y_vector(
-    I_data::Vector{Float64},
-    t::Vector{Float64},
-    k,
-    method
-)
-    """
-    This is for IHAT is a FUNCTION!
-    """
-    t0 = t[1]
-    tT = t[end]
-    m = k
-
-    x = clamp.(
-        (2 .* t .- (t0 + tT)) / (tT - t0),
-        -1.0,
-        1.0,
-    )
-
-    # t increases, but acos(x) decreases from π to 0
-    theta = reverse(acos.(x))
-    I_theta = reverse(I_data)
-
-    measure_theta(θ) = cos(m * θ)
-
-    if method == "S_improved"
-        return m * Integrate.integrate(
-            theta,
-            I_theta,
-            method;
-            measure = measure_theta,
-        )
-    else
-        measure_theta_vector = measure_theta.(theta)
-
-        return m * Integrate.integrate(
-            theta,
-            measure_theta_vector .* I_theta,
-            method
-        )[end]
-    end
-end
+using Statistics
 
 
 function get_weak_blocks(
@@ -362,7 +93,7 @@ function get_weak_blocks(
 
         # First approximate I
         # So Ihat is Ihat(x) = c0 + c1 * z + c2 * z^2 + c3 * z^3
-        Ihat = build_I_interpolant(t, I_data, method, order)
+        Ihat = build_I_interpolant(t, I_data, method; order=order)
 
         if plot_Ihat
             p = plot(
@@ -482,6 +213,37 @@ function get_weak_blocks(
     end
 
     return Y, W1, W2, W3
+end
+
+
+function get_blocks(
+    I_data::Vector{Float64},
+    t::Vector{Float64},
+    method::String
+)
+
+    I0 = I_data[1]
+    t0 = t[1]
+
+    if !(in_exception(method))
+        B1 = Integrate.integrate(t, I_data, method)
+        B2 = Integrate.integrate(t, I_data.^2, method)
+        B3 = 0.5 .* (B1.^2)
+
+        return I0, B1, B2, B3
+
+    elseif method in ["QSpline_GK", "CSpline_GK", "Akima_GK"]
+        Ihat = build_I_interpolant(t, I_data, method)
+
+        B1 = [DataInterpolations.integral(Ihat, t0, x) for x in t]
+        B2 = [quadgk(s -> Ihat(s)^2, t0, x)[1] for x in t]
+        B3 = 0.5 .* (B1.^2)
+
+        return I0, B1, B2, B3
+
+    else
+        error("Unknown integration method $method")
+    end
 end
 
 
@@ -698,6 +460,8 @@ function L_hat(paras, I0, W1, W2, W3)
 end
 
 
+# TODO: Select best solution based on RSS_Ihat_Idata
+# Currently not used!!
 function best_solution_weak(solution_list::Vector{Vector{Float64}}, Y::Vector, I0, W1, W2, W3)
     best_sol = Float64[]
     best_err = Inf
@@ -833,7 +597,7 @@ function select_T_weak(
         scaled = [s[j] / (T^powers[j]) for j in eachindex(s)]
 
         logs = log10.(scaled .+ eps())
-        score = var(logs)
+        score = Statistics.var(logs)
 
         if score < best_score
             best_score = score
@@ -930,15 +694,18 @@ function HC_LS_weak(
 
     t_scaled = t ./ T
     Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, order=order)
+    B = get_blocks(I_data, t_scaled, method)
 
     I0 = I_data[1]
 
+    # model for LS, object I_data
     iteration_counts = 0
     function model(x, p)
         iteration_counts += 1
-        return L_hat(p, I0, W1, W2, W3)
+        return Logic.I_hat(p, B...)
     end
 
+    # weak form for HC
     Lhat = L_hat(vars, I0, W1, W2, W3)
     J = sum((Lhat .- Y) .^ 2)
 
@@ -953,7 +720,7 @@ function HC_LS_weak(
     end
 
     RSS_before = [
-        Logic.get_RSS(Y, L_hat(r, I0, W1, W2, W3))
+        Logic.get_RSS(I_data, Logic.I_hat(r, B...))
         for r in real_results
     ]
 
@@ -965,29 +732,32 @@ function HC_LS_weak(
     successful_HC_indices = Int[]
     iteration_count_list = Int[]
 
-    xdata = collect(1:K)
     lb_scaled = Logic.to_scaled(Value.lb, T)
     ub_scaled = Logic.to_scaled(Value.ub, T)
 
     for (i, r) in enumerate(real_results)
-        p0 = Float64.(r)
+        p0_row = Float64.(r)
 
         # Make sure the starting point is inside the LS bounds
-        p0 = min.(max.(p0, lb_scaled), ub_scaled)
+        p0 = min.(max.(p0_row, lb_scaled), ub_scaled)
+
+        if p0 != p0_row
+            printstyled("Clipping happened. Before clipping: $p0_row; After clipping: $p0\n", color=:red)
+        end
 
         try
             iteration_counts = 0
             fit = curve_fit(
                 model,
-                xdata,
-                Y,
+                t_scaled,
+                I_data,
                 p0;
                 lower = lb_scaled,
                 upper = ub_scaled
             )
 
             push!(final_results_scaled, fit.param)
-            push!(RSS_after, Logic.get_RSS(Y, L_hat(fit.param, I0, W1, W2, W3)))
+            push!(RSS_after, Logic.get_RSS(I_data, Logic.I_hat(fit.param, B...)))
             push!(successful_HC_indices, i)
             push!(iteration_count_list, iteration_counts)
 
@@ -1005,7 +775,7 @@ function HC_LS_weak(
 
     best_result_scaled = final_results_scaled[idx_best_after_in_final]
     best_result = Logic.to_physical(best_result_scaled, T)
-    RSS = RSS_after[idx_best_after_in_final]
+    RSS_Ihat_Idata = RSS_after[idx_best_after_in_final]
 
     if idx_best_before in successful_HC_indices
         pos_before_best_afterLS = findfirst(==(idx_best_before), successful_HC_indices)
@@ -1026,22 +796,13 @@ function HC_LS_weak(
 
             println("\nBest result after LS:")
             println(best_result_scaled)
-            println("RSS after LS from after-best solution: ", RSS)
+            println("RSS after LS from after-best solution: ", RSS_Ihat_Idata)
         end
     else
         printstyled("Warning: the best HC solution before LS failed during LS refinement\n", color = :yellow, bold = true)
         println("Best result before LS: ", best_result_beforeLS)
     end
 
-    if in_exception(method)
-        B = Logic.get_blocks(I_data, t_scaled, "S")
-    else
-        B = Logic.get_blocks(I_data, t_scaled, method)
-    end
-
-    Ihat_best = Logic.I_hat(best_result_scaled, B...)
-
-    RSS_Ihat_Idata = Logic.get_RSS(Ihat_best, I_data)
 
     if if_print
         printstyled("===== HC_LS_weak SIR Results =====\n", color = :magenta, bold = true)
@@ -1060,13 +821,9 @@ function HC_LS_weak(
             println(var, " = ", val)
         end
 
-        println("\nResidual sum of squares (RSS_Lhat_L(Y)): ", RSS)
-
-
         printstyled("----------------------------------\n", color = :blue)
-        RSS_Ihat_Idata_param = Logic.get_RSS(I_data, Logic.I_hat(best_result_scaled, B...))
         println("RSS_Ihat_Idata at best weak params = ",
-            RSS_Ihat_Idata_param
+            RSS_Ihat_Idata
         )
 
         if true_vals !== nothing
@@ -1140,8 +897,8 @@ function HC_LS_weak(
                 iteration_counts = 0
                 fit = curve_fit(
                     model,
-                    xdata,
-                    Y,
+                    t_scaled,
+                    I_data,
                     initial;
                     lower = lb_scaled,
                     upper = ub_scaled
@@ -1159,7 +916,7 @@ function HC_LS_weak(
         end
     end
 
-    return best_result, RSS, RSS_Ihat_Idata, parameter_err
+    return best_result, RSS_Ihat_Idata, parameter_err
 end
 
 

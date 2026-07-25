@@ -68,7 +68,7 @@ function main()
 
     S, I, R = Logic.simulate_sir(t)
 
-    noise = 0.05
+    noise = 0.01
     println("Noise level: $noise")
     I_data = I .+ noise .* I .* randn(length(I))
 
