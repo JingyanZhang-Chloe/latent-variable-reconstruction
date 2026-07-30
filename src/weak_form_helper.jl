@@ -16,7 +16,7 @@ function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method
     if method in ["QSpline_GK", "Qspline_exact"]
         return QuadraticSpline(I_data, t)
 
-    elseif method in ["CSpline_GK", "CSpine_exact"]
+    elseif method in ["CSpline_GK", "CSpline_exact"]
         return CubicSpline(I_data, t)
 
     elseif method in ["Akima_GK", "Akima_exact"]

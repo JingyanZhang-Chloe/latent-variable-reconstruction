@@ -1,7 +1,7 @@
 # latent-variable-reconstruction
 This repository continues and extends the Bachelor Thesis project originally developed in:  [model-integration](https://github.com/JingyanZhang-Chloe/model-integration). The goal of this version is to clean the implementation, improve the algorithm, and prepare reproducible experiments.
 
-## Different methods of Integration for Weak Form
+## Different methods of Integration for Weak Form for SIR
 
 - `"T"`: Trapezoidal Integration method, corresponding to `cumul_integrate(x, y)` from `Integrate`
 - `"S"`: Simpson's Integration method, corresponding to `cumintegrate(x, y)` implemented in `Integrate.jl`

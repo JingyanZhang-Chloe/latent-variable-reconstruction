@@ -93,8 +93,7 @@ function main()
 #    HC_LS_weak(t, I_data, variables, "S_improved", :polynomial; K=K)
 #    HC_LS_weak(t, I_data, variables, "S_improved", :chebyshev_U; K=K)
 
-    HC_LS_weak(t, I_data, variables, "BSpline_GK", :chebyshev_U; order=6)
-    HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U)
+    HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U, plot_Ihat=true)
 
 #    for degree in 3:8
 #        HC_LS_weak(t, I_data, variables, "BSpline_GK", :sin; K=K, degree=degree)

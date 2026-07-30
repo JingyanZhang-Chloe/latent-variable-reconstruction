@@ -96,8 +96,10 @@ function get_weak_blocks(
         Ihat = build_I_interpolant(t, I_data, method; order=order)
 
         if plot_Ihat
+            t_plot = range(t[1], t[end], length=10000)
             p = plot(
-                Ihat;
+                t_plot,
+                Ihat.(t_plot);
                 label = "$method interpolant",
                 xlabel = "t",
                 ylabel = "I(t)"
@@ -386,7 +388,7 @@ function weak_block_analysis(
         printstyled("method = ", method, color=:yellow, bold=true)
         println()
 
-        Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function; order=order, plot_Ihat=true)
+        Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function; order=order, plot_Ihat=false)
 
         # ------------------------------------------------------------
         # Table 1: actual signed block values
@@ -643,7 +645,8 @@ function HC_LS_weak(
     threshold::Float64=1e-2,
     compare_LS::Bool=false,
     perturb::Float64=0.20, # 20% perturb on true param as initial guess of LS
-    LS_iter::Int=5
+    LS_iter::Int=5,
+    plot_Ihat::Bool=false
 )
     """
     YES time rescaling
@@ -693,7 +696,7 @@ function HC_LS_weak(
 
 
     t_scaled = t ./ T
-    Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, order=order)
+    Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, order=order, plot_Ihat=plot_Ihat)
     B = get_blocks(I_data, t_scaled, method)
 
     I0 = I_data[1]
@@ -834,7 +837,7 @@ function HC_LS_weak(
                 RSS_Ihat_Idata_true
             )
 
-            if RSS_Ihat_Idata_param < RSS_Ihat_Idata_true
+            if RSS_Ihat_Idata < RSS_Ihat_Idata_true
                 printstyled("RSS Consistent!\n", color = :red)
             else
                 printstyled("RSS NOT Consistent!\n", color = :red)

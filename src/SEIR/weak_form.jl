@@ -59,6 +59,26 @@ function get_weak_blocks(
 
         Ihat = build_I_interpolant(t, I_data, method; order=order)
 
+        if plot_Ihat
+            p = plot(
+                Ihat;
+                label = "$method interpolant",
+                xlabel = "t",
+                ylabel = "I(t)"
+            )
+
+            scatter!(
+                p,
+                t,
+                I_data;
+                label = "Observed data",
+                markersize=1,
+                markeralpha = 0.3
+            )
+
+            display(p)
+        end
+
         # F_values = Integrate.integrate(t, I_data, "S")
         # G_values = Integrate.integrate(t, I_data.^2, "S")
 
@@ -439,7 +459,8 @@ function HC_LS_weak(
     print_root_record::Bool=true,
     compare_LS::Bool=false,
     perturb::Float64=0.20, # 20% perturb on true param as initial guess of LS
-    LS_iter::Int=5
+    LS_iter::Int=5,
+    plot_Ihat::Bool=false
 )
     """
     YES time rescaling
@@ -489,7 +510,7 @@ function HC_LS_weak(
 
 
     t_scaled = t ./ T
-    Y, W1, W2, W3, W4, W5, W6 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, order=order)
+    Y, W1, W2, W3, W4, W5, W6 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, order=order, plot_Ihat=plot_Ihat)
     B = get_blocks(I_data, t_scaled, method)
 
     I0 = I_data[1]

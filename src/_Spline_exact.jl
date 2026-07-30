@@ -1,3 +1,99 @@
+# ======================================================== For Spline_exact
+function local_poly_coeffs(Ihat, a, b, degree::Int)
+    """
+    QSpline has degree 2
+    CSpline and Akima have degree 3 (since C2)
+
+    We are storing the coefficients of q(z)
+    Then Ihat in [a, b] => Ihat(x) = q(x-m)
+    """
+
+    m = (a + b) / 2
+    h = (b - a) / 2
+
+    c0 = Ihat(m)
+    c1 = DataInterpolations.derivative(Ihat, m, 1)
+    c2 = 0.5 * DataInterpolations.derivative(Ihat, m, 2)
+
+    if degree == 2
+        return [c0, c1, c2, 0], m
+    elseif degree == 3
+        c3 = (Ihat(b) - Ihat(a) - 2 * c1 * h) / 2 * h^3
+
+        return [c0, c1, c2, c3], m
+    else
+        error("Only degree 2 or 3 supported for now")
+    end
+end
+
+
+function poly_mul(p_coeffs::Vector{Float64}, q_coeffs::Vector{Float64})
+    """
+    Multiply two polynomials, given their coefficients as Vector
+    Return the resulting polynomial coefficients Vector
+    """
+    r = zeros(Float64, length(p_coeffs) + length(q_coeffs) - 1)
+
+    for i in eachindex(p_coeffs)
+        for j in eachindex(q_coeffs)
+            r[i + j - 1] += p_coeffs[i] * q_coeffs[j]
+        end
+    end
+
+    return r
+end
+
+
+function get_F_coeffs(qcoeffs::Vector{Float64}, h, Fa)
+    """
+    Giving the coeff of Ihat, compute on the interval [a, b]
+    F = ∫ Ihat(s) ds
+    Return the coefficients Vector of F, since it is also a polynomial
+    Assuming we know F(a)
+
+    F(s) = ∫_a^s Ihat(x)dx
+    => (z = x - m) recall m = a+b/2 and h = b-a/2
+    F(s) = ∫_(a-m)^(s-m) [c0 + c1 z + c2 z^2 + c3 z^3] dz
+    =>
+    F(s) = ∫_(-h)^(s-m) [c0 + c1 z + c2 z^2 + c3 z^3] dz
+    """
+
+    deg = length(qcoeffs) - 1
+    Fcoeffs = zeros(Float64, deg + 2)
+
+    Fcoeffs[1] = Fa
+    for n in 0:deg
+        # For each term of q --- c_n * z^n --- integrate: c_n 1/n+1 * ((s-m)^(n+1) - (-h)^(n+1))
+        # If we do u = s-m
+        # So F(s) = F(u + m) = ~F(u) = poly we are computing rn
+        # So we have a constant term: - c_n * 1/n+1 * (-h)^(n+1)
+        # And a z^(n+1) term with coeff: c_n * 1/n+1
+        c = qcoeffs[n + 1]
+
+        # constant part from - c * (-h)^(n+1)/(n+1)
+        Fcoeffs[1] -= c * (-h)^(n + 1) / (n + 1)
+
+        # coefficient of z^(n+1)
+        Fcoeffs[n + 2] += c / (n + 1)
+    end
+
+    return Fcoeffs
+end
+
+
+function cumulative_F(Fa, a, b)
+    """
+    Compute F(b)
+    """
+end
+
+
+function trig_moments(n, basis::Symbol, a, b)
+    """
+    Compute ∫ z^n sin or ∫ z^n cos
+    """
+end
+# ========================================================
 
 
 function interval_integral_poly(qcoeffs::Vector{Float64}, h::Float64)
