@@ -29,8 +29,8 @@ function main()
 
     results = Logic.HC_LS(t, I_data, variables, "S")
     Logic.print_HC_LS(results)
-#
-    # HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U, compare_LS=true)
+
+    HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U, compare_LS=true, profiling=true, perturb=0.50)
     println()
 
 #    t_scaled = t ./ 100

@@ -35,6 +35,7 @@ function get_weak_blocks(
     testing_function::Symbol;
     m::Union{Int, Nothing}=nothing,
     order::Union{Int, Nothing}=nothing,
+    n_control_points::Union{Int, Nothing}=nothing,
     plot_Ihat::Bool=false
 )
     # Since we are differentiating, maybe it is better to write in the original form
@@ -93,7 +94,7 @@ function get_weak_blocks(
 
         # First approximate I
         # So Ihat is Ihat(x) = c0 + c1 * z + c2 * z^2 + c3 * z^3
-        Ihat = build_I_interpolant(t, I_data, method; order=order)
+        Ihat = build_I_interpolant(t, I_data, method; order=order, n_control_points=n_control_points)
 
         if plot_Ihat
             t_plot = range(t[1], t[end], length=10000)
@@ -149,6 +150,7 @@ function get_weak_blocks(
             I_data,
             BSplineOrder(order)
         )
+
         if plot_Ihat
             p = plot(
                 Ihat;
@@ -191,6 +193,58 @@ function get_weak_blocks(
             W3[k] = quadgk(x -> phi(x) * Ihat(x) * Fhat(x), t)[1]
         end
 
+    elseif method in ["BSplineApprox"]
+        # First approximate I
+        # So Ihat is Ihat(x) = c0 + c1 * z + c2 * z^2 + c3 * z^3
+        Ihat = build_I_interpolant(t, I_data, method; order=order, n_control_points=n_control_points)
+
+        if plot_Ihat
+            t_plot = range(t[1], t[end], length=10000)
+            p = plot(
+                t_plot,
+                Ihat.(t_plot);
+                label = "$method interpolant",
+                xlabel = "t",
+                ylabel = "I(t)"
+            )
+
+            scatter!(
+                p,
+                t,
+                I_data;
+                label = "Observed data",
+                markersize=1,
+                markeralpha = 0.3
+            )
+
+            display(p)
+        end
+
+        F_values = cumulative_quadgk(Ihat, t)
+
+        # TODO: Check how to interpolate F_values properly
+        F = DataInterpolations.CubicSpline(
+            F_values,
+            t
+        )
+
+        for k in 1:K
+            # General weak LHS, including boundary term
+            phi, dphi = get_testing_function(t, k, K, testing_function; m)
+
+            # General weak LHS, including boundary term
+            if testing_function == :chebyshev_U
+                Y[k] = chebyshev_U_Y(Ihat, t0, tT, k)
+            else
+                boundary = phi(tT) * I_data[end] - phi(t0) * I_data[1]
+                Y[k] = boundary - quadgk(x -> dphi(x) * Ihat(x), t)[1]
+            end
+
+            W1[k] = quadgk(x -> phi(x) * Ihat(x), t)[1]
+            W2[k] = quadgk(x -> phi(x) * Ihat(x)^2, t)[1]
+            W3[k] = quadgk(x -> phi(x) * Ihat(x) * F(x), t)[1]
+        end
+
     elseif method in ["QSpline_exact", "CSpline_exact", "Akima_exact"]
         error("not implemented heihei")
 
@@ -221,7 +275,9 @@ end
 function get_blocks(
     I_data::Vector{Float64},
     t::Vector{Float64},
-    method::String
+    method::String;
+    order::Union{Int, Nothing}=nothing,
+    n_control_points::Union{Int, Nothing}=nothing,
 )
 
     I0 = I_data[1]
@@ -238,7 +294,16 @@ function get_blocks(
         Ihat = build_I_interpolant(t, I_data, method)
 
         B1 = [DataInterpolations.integral(Ihat, t0, x) for x in t]
-        B2 = [quadgk(s -> Ihat(s)^2, t0, x)[1] for x in t]
+        B2 = cumulative_quadgk(s -> Ihat(s)^2, t)
+        B3 = 0.5 .* (B1.^2)
+
+        return I0, B1, B2, B3
+
+    elseif method in ["BSplineApprox"]
+        Ihat = build_I_interpolant(t, I_data, method, order=order, n_control_points=n_control_points)
+
+        B1 = cumulative_quadgk(Ihat, t)
+        B2 = cumulative_quadgk(s -> Ihat(s)^2, t)
         B3 = 0.5 .* (B1.^2)
 
         return I0, B1, B2, B3
@@ -491,6 +556,7 @@ function select_K_weak(
     threshold::Float64;
     m::Union{Int, Nothing}=nothing,
     order::Union{Int, Nothing}=nothing,
+    n_control_points::Union{Int, Nothing}=nothing,
     minimum_K::Int=3,
     consecutive::Int=3,
     if_print::Bool=false
@@ -516,7 +582,8 @@ function select_K_weak(
         method,
         testing_function;
         m=m,
-        order=order
+        order=order,
+        n_control_points=n_control_points,
     )
 
     small_count = 0
@@ -577,9 +644,10 @@ function select_T_weak(
     m,
     m_min::Int = -6,
     m_max::Int = 6,
-    order::Int
+    order::Union{Int, Nothing}=nothing,
+    n_control_points::Union{Int, Nothing}=nothing,
 )
-    Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function; m=m, order=order)
+    Y, W1, W2, W3 = get_weak_blocks(I_data, t, K, method, testing_function; m=m, order=order, n_control_points=n_control_points)
 
     s = [
         norm(Y),
@@ -614,22 +682,6 @@ function select_T_weak(
 end
 
 
-function select_K_T_weak(
-    I_data::Vector{Float64},
-    t::Vector{Float64},
-    method::String,
-    testing_function::Symbol;
-    order::Int,
-    threshold=1e-2,
-    maximum_K=200
-)
-    """
-    alternatively select T and K, since selecting T requires K, but after time rescaling, the block size will change
-    """
-end
-
-
-
 function HC_LS_weak(
     t::Vector{Float64},
     I_data::Vector{Float64},
@@ -641,6 +693,7 @@ function HC_LS_weak(
     if_print=true,
     m=10,
     order=3,
+    n_control_points=max(5, round(Int, 0.3 * length(t))),
     maximum_K::Int=length(t), # N datapoints -> N dimentional vector space
     threshold::Float64=1e-2,
     compare_LS::Bool=false,
@@ -655,12 +708,12 @@ function HC_LS_weak(
     Still make initial points in bounds before LS
     """
     if K === nothing
-        K = select_K_weak(I_data, t, method, testing_function, maximum_K, threshold; order=order)
+        K = select_K_weak(I_data, t, method, testing_function, maximum_K, threshold; order=order, n_control_points=n_control_points)
     end
 
     # Since selecting T requires K, if T >= 1, K selected before is still valid for rescaled blocks
     # However if T < 1, blocks can be larger than threshold
-    T, _ = select_T_weak(I_data, t, K, method, testing_function; m=m, order=order)
+    T, _ = select_T_weak(I_data, t, K, method, testing_function; m=m, order=order, n_control_points=n_control_points)
 
     if T < 1
         @warn(
@@ -674,7 +727,8 @@ function HC_LS_weak(
             method,
             testing_function;
             m=m,
-            order=order
+            order=order,
+            n_control_points=n_control_points
         )
 
         T, _ = select_T_weak(
@@ -684,7 +738,8 @@ function HC_LS_weak(
             method,
             testing_function;
             m=m,
-            order=order
+            order=order,
+            n_control_points=n_control_points
         )
     end
 
@@ -696,8 +751,8 @@ function HC_LS_weak(
 
 
     t_scaled = t ./ T
-    Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, order=order, plot_Ihat=plot_Ihat)
-    B = get_blocks(I_data, t_scaled, method)
+    Y, W1, W2, W3 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, order=order, n_control_points=n_control_points, plot_Ihat=plot_Ihat)
+    B = get_blocks(I_data, t_scaled, method, order=order, n_control_points=n_control_points)
 
     I0 = I_data[1]
 

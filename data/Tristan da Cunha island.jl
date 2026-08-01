@@ -61,7 +61,8 @@ function main()
         println("HC_LS failed. Error message $e")
     end
 
-    HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U; true_vals=true_vals, threshold=0.5, compare_LS=true)
+    # HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U; true_vals=true_vals, threshold=0.5, compare_LS=true, plot_Ihat=true)
+    HC_LS_weak(t, I_data, variables, "BSplineApprox", :chebyshev_U; true_vals=true_vals, threshold=0.5, compare_LS=true, plot_Ihat=true)
 
     println()
 end

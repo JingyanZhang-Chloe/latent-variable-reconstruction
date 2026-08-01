@@ -54,7 +54,6 @@ function get_weak_blocks(
     tT = t[end]
     L = tT - t0
 
-
     if method in ["QSpline_GK", "CSpline_GK", "Akima_GK"]
 
         Ihat = build_I_interpolant(t, I_data, method; order=order)
@@ -86,15 +85,33 @@ function get_weak_blocks(
         # F(x) = DataInterpolations.integral(Ihat, t0, x)
         # G(x) = quadgk(s -> Ihat(s)^2, t0, x)[1]
 
-        F_values = [
-            DataInterpolations.integral(Ihat, t0, x)
-            for x in t
-        ]
+        F_values = Float64[]
+        F_current = 0.0
 
-        G_values = [
-            quadgk(s -> Ihat(s)^2, t0, x)[1]
-            for x in t
-        ]
+        G_values = Float64[]
+        G_current = 0.0
+
+        for i in eachindex(t)
+            if i == firstindex(t)
+                push!(F_values, F_current)
+                push!(G_values, G_current)
+            else
+                F_current += DataInterpolations.integral(
+                    Ihat,
+                    t[i-1],
+                    t[i]
+                )
+
+                G_current += quadgk(
+                    s -> Ihat(s)^2,
+                    t[i-1],
+                    t[i]
+                )[1]
+
+                push!(F_values, F_current)
+                push!(G_values, G_current)
+            end
+        end
 
         Fhat = build_I_interpolant(t, F_values, method; order=order)
         Ghat = build_I_interpolant(t, G_values, method; order=order)
@@ -167,16 +184,16 @@ function get_blocks(
 
         B1 = 1
         B2 = [DataInterpolations.integral(Ihat, t0, x) for x in t]
-        B3 = [quadgk(s -> (Ihat(s)^2 - I0^2), t0, x)[1] for x in t]
-        B4 = t .* B2 .- [quadgk(s -> (s * Ihat(s)), t0, x)[1] for x in t]
-        B5 = t .* [quadgk(s -> (Ihat(s)^2), t0, x)[1] for x in t] .- [quadgk(s -> (s * Ihat(s)^2), t0, x)[1] for x in t]
+        B3 = cumulative_quadgk(s -> (Ihat(s)^2 - I0^2), t)
+        B4 = t .* B2 .- cumulative_quadgk(s -> (s * Ihat(s)), t)
+        B5 = t .* cumulative_quadgk(s -> Ihat(s)^2, t) .- cumulative_quadgk(s -> (s * Ihat(s)^2), t)
 
         # TODO: Check these two approaches
         # F(x) = DataInterpolations.integral(Ihat, t0, x)
         # B6 = [quadgk(s -> (F(s)^2), t0, x)[1] for x in t]
 
         B2hat = build_I_interpolant(t, B2, method)
-        B6 = [quadgk(s -> B2hat(s)^2, t0, x)[1] for x in t]
+        B6 = cumulative_quadgk(s -> B2hat(s)^2, t)
 
         return I0, B1, B2, B3, B4, B5, B6
 
@@ -460,7 +477,8 @@ function HC_LS_weak(
     compare_LS::Bool=false,
     perturb::Float64=0.20, # 20% perturb on true param as initial guess of LS
     LS_iter::Int=5,
-    plot_Ihat::Bool=false
+    plot_Ihat::Bool=false,
+    profiling::Bool=false
 )
     """
     YES time rescaling
@@ -468,6 +486,10 @@ function HC_LS_weak(
     No complicated projection to bounds after HC
     Still make initial points in bounds before LS
     """
+
+    times = Dict{String, Float64}()
+
+    time_start = time()
     if K === nothing
         K = select_K_weak(I_data, t, method, testing_function, maximum_K, threshold; order=order)
     end
@@ -508,11 +530,18 @@ function HC_LS_weak(
         error("method needs update because T always < 1")
     end
 
+    times["select K T"] = time() - time_start
 
+    time_start = time()
     t_scaled = t ./ T
     Y, W1, W2, W3, W4, W5, W6 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, order=order, plot_Ihat=plot_Ihat)
-    B = get_blocks(I_data, t_scaled, method)
+    times["get weak blocks"] = time() - time_start
 
+    time_start = time()
+    B = get_blocks(I_data, t_scaled, method)
+    times["get blocks"] = time() - time_start
+
+    time_start = time()
     I0 = I_data[1]
 
     iteration_counts = 0
@@ -533,6 +562,7 @@ function HC_LS_weak(
     if isempty(real_results)
         error("No real HC solution found for SEIR weak form.")
     end
+    times["HC"] = time() - time_start
 
     lb_scaled = Logic.to_scaled(Value.lb, T)
     ub_scaled = Logic.to_scaled(Value.ub, T)
@@ -545,6 +575,7 @@ function HC_LS_weak(
     hc_rss_list = Float64[]
     ls_rss_list = Float64[]
 
+    time_start = time()
     for (i, r) in enumerate(real_results)
         hc_root = Float64.(r)
         hc_rss = Logic.get_RSS(I_data, Logic.I_hat(r, B..., t_scaled))
@@ -617,6 +648,7 @@ function HC_LS_weak(
     if final_results_scaled_empty
         error("No valid LS-refined solutions found.")
     end
+    times["LS"] = time() - time_start
 
     hc_best_index = argmin(hc_rss_list)
     ls_best_index = argmin(ls_rss_list)
@@ -718,12 +750,14 @@ function HC_LS_weak(
         end
 
         printstyled("------------ Comparison with LS\n", color = :blue)
+        println("perturb: ", perturb)
 
         for i in 1:LS_iter
             initial = true_vals .+ perturb .* true_vals .* randn(length(true_vals))
 
             # Make sure the starting point is inside the LS bounds
             initial = min.(max.(initial, lb_scaled), ub_scaled)
+            initial = Logic.to_scaled(initial, T)
 
             try
                 iteration_counts = 0
@@ -740,11 +774,19 @@ function HC_LS_weak(
                 println("$i-th LS with initial guess $initial")
                 println("model evaluations = ", iteration_counts)
                 println("RSS_Ihat_Idata ", Logic.get_RSS(I_data, Logic.I_hat(fit.param, B..., t_scaled)))
+                println("final answer: ", Logic.to_physical(fit.param, T))
                 printstyled("------------\n", color = :blue)
                 println()
             catch e
                 @warn "curve_fit failed for initial point" initial exception=e
             end
+        end
+    end
+
+    if profiling
+        printstyled("------------ Timing\n", color = :blue)
+        for (name, t) in times
+            println("$name : $(round(t, digits=4)) seconds")
         end
     end
 

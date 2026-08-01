@@ -8,11 +8,14 @@ Date: 21/07/2026
 =#
 
 function in_exception(me::String)
-    return (me in ["S_improved", "S_formula_improved", "QSpline_GK", "CSpline_GK", "Akima_GK", "Qspline_exact", "CSpine_exact", "Akima_exact", "BSpline_GK"])
+    return (me in ["S_improved", "S_formula_improved", "QSpline_GK", "CSpline_GK", "Akima_GK", "Qspline_exact", "CSpine_exact", "Akima_exact", "BSpline_GK", "BSplineApprox"])
 end
 
 
-function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method::String; order::Union{Int,Nothing}=nothing)
+function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method::String;
+    order::Union{Int,Nothing}=nothing,
+    n_control_points::Union{Int, Nothing}=nothing
+)
     if method in ["QSpline_GK", "Qspline_exact"]
         return QuadraticSpline(I_data, t)
 
@@ -29,6 +32,25 @@ function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method
 
         B = BSplineInterpolation(I_data, t, order, :ArcLen, :Average)
         return B
+
+    elseif method in ["BSplineApprox"]
+        if order === nothing
+            error("B_SplineApprox requires interpolation order")
+        end
+
+        if n_control_points === nothing
+            error("B_SplineApprox requires n_control_points")
+        end
+
+        return BSplineApprox(
+            I_data,
+            t,
+            order,
+            n_control_points,
+            :Uniform,
+            :Average
+        )
+
     else
         error("Unknown spline-GK method: $method")
     end
@@ -175,4 +197,30 @@ function chebyshev_U_Y_vector(
             method
         )[end]
     end
+end
+
+
+"""
+Compute [quadgk(s -> Ihat(s)^power, t0, x)[1] for x in t]
+"""
+function cumulative_quadgk(
+    integrand,
+    t::Vector{Float64}
+)
+    F_values = Float64[]
+    F_current = 0.0
+
+    push!(F_values, F_current)
+
+    for i in 2:length(t)
+        F_current += quadgk(
+            integrand,
+            t[i-1],
+            t[i]
+        )[1]
+
+        push!(F_values, F_current)
+    end
+
+    return F_values
 end
