@@ -7,14 +7,22 @@ Author: zhangjingyan
 Date: 21/07/2026
 =#
 
+using DataInterpolations
+using RegularizationTools
+using Profile
+using ProfileView
+
+
 function in_exception(me::String)
-    return (me in ["S_improved", "S_formula_improved", "QSpline_GK", "CSpline_GK", "Akima_GK", "Qspline_exact", "CSpine_exact", "Akima_exact", "BSpline_GK", "BSplineApprox"])
+    return !(me in ["T", "S", "S_uniform"])
 end
 
 
 function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method::String;
     order::Union{Int,Nothing}=nothing,
-    n_control_points::Union{Int, Nothing}=nothing
+    n_control_points::Union{Int, Nothing}=nothing,
+    d_smooth::Union{Int, Nothing}=nothing,
+    λ::Union{Int, Nothing}=nothing
 )
     if method in ["QSpline_GK", "Qspline_exact"]
         return QuadraticSpline(I_data, t)
@@ -50,6 +58,26 @@ function build_I_interpolant(t::Vector{Float64}, I_data::Vector{Float64}, method
             :Uniform,
             :Average
         )
+
+    elseif method in ["RegularizationSmooth"]
+        if d_smooth === nothing
+            error("RegularizationSmooth requires derivative order d_smooth")
+        end
+
+        if λ === nothing
+            error("RegularizationSmooth requires the regularization (smoothing) parameter λ")
+        end
+
+        return RegularizationSmooth(
+            I_data,
+            t,
+            d_smooth;
+            λ = λ,
+            alg = :fixed
+        )
+
+    elseif method in ["PCHIP"]
+        return PCHIPInterpolation(I_data, t)
 
     else
         error("Unknown spline-GK method: $method")
@@ -223,4 +251,100 @@ function cumulative_quadgk(
     end
 
     return F_values
+end
+
+
+struct RootRecord
+    index::Int
+
+    # HC
+    hc_root::Vector{Float64}
+    hc_rss::Float64
+
+    # clipping information
+    clipped::Bool
+    clipped_root::Vector{Float64}
+    clipped_rss::Union{Float64, Nothing}
+
+    # LS stage
+    ls_success::Bool
+    ls_root::Union{Vector{Float64}, Nothing}
+    ls_rss::Union{Float64, Nothing}
+    ls_iterations::Union{Int, Nothing}
+
+    # if LS failed
+    error_message::Union{String, Nothing}
+end
+
+
+function RootRecord(;
+    index,
+    hc_root,
+    hc_rss,
+    clipped,
+    clipped_root,
+    clipped_rss,
+    ls_success,
+    ls_root=nothing,
+    ls_rss=nothing,
+    ls_iterations=nothing,
+    error_message=nothing
+)
+    return RootRecord(
+        index,
+        hc_root,
+        hc_rss,
+        clipped,
+        clipped_root,
+        clipped_rss,
+        ls_success,
+        ls_root,
+        ls_rss,
+        ls_iterations,
+        error_message
+    )
+end
+
+
+function print_root_info(r::RootRecord)
+
+    println("======================================")
+    println("Root #$(r.index)")
+    println("======================================")
+
+    println("HC result:")
+    println("  params = ", r.hc_root)
+    println("  RSS    = ", r.hc_rss)
+
+    println()
+
+    println("Clipping:")
+    println("  happened = ", r.clipped)
+
+    if r.clipped
+        println(" Root after clipping = ", r.clipped_root)
+        println(" RSS after clipping = ", r.clipped_rss)
+    end
+
+    println()
+
+    println("LS result:")
+    println("  success = ", r.ls_success)
+
+    if r.ls_success
+        println("  params = ", r.ls_root)
+        println("  RSS    = ", r.ls_rss)
+        println("  iterations = ", r.ls_iterations)
+
+        println()
+
+        println("Improvement:")
+        println("  ΔRSS = ", r.hc_rss - r.ls_rss)
+
+    else
+        println("  FAILED")
+        println("  error = ", r.error_message)
+    end
+
+    println()
 end

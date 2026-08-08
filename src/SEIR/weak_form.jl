@@ -34,6 +34,9 @@ function get_weak_blocks(
     testing_function::Symbol;
     m::Union{Int, Nothing}=nothing,
     order::Union{Int, Nothing}=nothing,
+    n_control_points::Union{Int, Nothing}=nothing,
+    d_smooth::Union{Int, Nothing}=nothing,
+    λ::Union{Int, Nothing}=nothing,
     plot_Ihat::Bool=false
 )
 
@@ -54,67 +57,72 @@ function get_weak_blocks(
     tT = t[end]
     L = tT - t0
 
-    if method in ["QSpline_GK", "CSpline_GK", "Akima_GK"]
+    if method in ["QSpline_GK", "CSpline_GK", "Akima_GK", "BSpline_GK", "BSplineApprox", "RegularizationSmooth", "PCHIP"]
 
-        Ihat = build_I_interpolant(t, I_data, method; order=order)
+        if method in ["QSpline_GK", "CSpline_GK", "Akima_GK"]
+            Ihat = build_I_interpolant(t, I_data, method; order=order)
 
-        if plot_Ihat
-            p = plot(
-                Ihat;
-                label = "$method interpolant",
-                xlabel = "t",
-                ylabel = "I(t)"
-            )
+            F_values = Float64[]
+            F_current = 0.0
 
-            scatter!(
-                p,
-                t,
-                I_data;
-                label = "Observed data",
-                markersize=1,
-                markeralpha = 0.3
-            )
+            G_values = cumulative_quadgk(s -> Ihat(s)^2, t)
 
-            display(p)
-        end
+            for i in eachindex(t)
+                if i == firstindex(t)
+                    push!(F_values, F_current)
+                else
+                    F_current += DataInterpolations.integral(
+                        Ihat,
+                        t[i-1],
+                        t[i]
+                    )
 
-        # F_values = Integrate.integrate(t, I_data, "S")
-        # G_values = Integrate.integrate(t, I_data.^2, "S")
-
-        # Issue: hang for a very long time
-        # F(x) = DataInterpolations.integral(Ihat, t0, x)
-        # G(x) = quadgk(s -> Ihat(s)^2, t0, x)[1]
-
-        F_values = Float64[]
-        F_current = 0.0
-
-        G_values = Float64[]
-        G_current = 0.0
-
-        for i in eachindex(t)
-            if i == firstindex(t)
-                push!(F_values, F_current)
-                push!(G_values, G_current)
-            else
-                F_current += DataInterpolations.integral(
-                    Ihat,
-                    t[i-1],
-                    t[i]
-                )
-
-                G_current += quadgk(
-                    s -> Ihat(s)^2,
-                    t[i-1],
-                    t[i]
-                )[1]
-
-                push!(F_values, F_current)
-                push!(G_values, G_current)
+                    push!(F_values, F_current)
+                end
             end
+
+            Fhat = build_I_interpolant(t, F_values, method; order=order)
+            Ghat = build_I_interpolant(t, G_values, method; order=order)
+
+        elseif method in ["BSpline_GK"]
+
+            Ihat = BSplineKit.interpolate(
+                t,
+                I_data,
+                BSplineOrder(order)
+            )
+
+            Ispline = BSplineKit.Splines.spline(Ihat)
+
+            # Exact analytical antiderivative.
+            Fhat = BSplineKit.Splines.integral(Ispline)
+
+            G_values = cumulative_quadgk(s -> Ihat(s)^2, t)
+
+            Ghat = DataInterpolations.CubicSpline(
+                G_values,
+                t
+            )
+
+        elseif method in ["BSplineApprox", "RegularizationSmooth", "PCHIP"]
+
+            Ihat = build_I_interpolant(t, I_data, method; order=order, n_control_points=n_control_points, d_smooth=d_smooth, λ=λ)
+
+            F_values = cumulative_quadgk(Ihat, t)
+            G_values = cumulative_quadgk(s -> Ihat(s)^2, t)
+
+            Fhat = DataInterpolations.CubicSpline(
+                F_values,
+                t
+            )
+
+            Ghat = DataInterpolations.CubicSpline(
+                G_values,
+                t
+            )
+
         end
 
-        Fhat = build_I_interpolant(t, F_values, method; order=order)
-        Ghat = build_I_interpolant(t, G_values, method; order=order)
 
         for k in 1:K
             # General weak LHS, including boundary term
@@ -155,6 +163,26 @@ function get_weak_blocks(
         end
     end
 
+    if plot_Ihat
+        p = plot(
+            Ihat;
+            label = "$method interpolant",
+            xlabel = "t",
+            ylabel = "I(t)"
+        )
+
+        scatter!(
+            p,
+            t,
+            I_data;
+            label = "Observed data",
+            markersize=1,
+            markeralpha = 0.3
+        )
+
+        display(p)
+    end
+
     return Y, W1, W2, W3, W4, W5, W6
 end
 
@@ -162,7 +190,11 @@ end
 function get_blocks(
     I_data::Vector{Float64},
     t::Vector{Float64},
-    method::String
+    method::String;
+    order::Union{Int, Nothing}=nothing,
+    n_control_points::Union{Int, Nothing}=nothing,
+    d_smooth::Union{Int, Nothing}=nothing,
+    λ::Union{Int, Nothing}=nothing
 )
     t0 = t[1]
 
@@ -184,6 +216,25 @@ function get_blocks(
 
         B1 = 1
         B2 = [DataInterpolations.integral(Ihat, t0, x) for x in t]
+        B3 = cumulative_quadgk(s -> (Ihat(s)^2 - I0^2), t)
+        B4 = t .* B2 .- cumulative_quadgk(s -> (s * Ihat(s)), t)
+        B5 = t .* cumulative_quadgk(s -> Ihat(s)^2, t) .- cumulative_quadgk(s -> (s * Ihat(s)^2), t)
+
+        # TODO: Check these two approaches
+        # F(x) = DataInterpolations.integral(Ihat, t0, x)
+        # B6 = [quadgk(s -> (F(s)^2), t0, x)[1] for x in t]
+
+        B2hat = build_I_interpolant(t, B2, method)
+        B6 = cumulative_quadgk(s -> B2hat(s)^2, t)
+
+        return I0, B1, B2, B3, B4, B5, B6
+
+    elseif method in ["BSplineApprox", "RegularizationSmooth", "PCHIP"]
+        Ihat = build_I_interpolant(t, I_data, method, order=order, n_control_points=n_control_points, d_smooth=d_smooth, λ=λ)
+        I0 = Ihat(t0)
+
+        B1 = 1
+        B2 = cumulative_quadgk(Ihat, t)
         B3 = cumulative_quadgk(s -> (Ihat(s)^2 - I0^2), t)
         B4 = t .* B2 .- cumulative_quadgk(s -> (s * Ihat(s)), t)
         B5 = t .* cumulative_quadgk(s -> Ihat(s)^2, t) .- cumulative_quadgk(s -> (s * Ihat(s)^2), t)
@@ -235,6 +286,9 @@ function select_K_weak(
     threshold::Float64;
     m::Union{Int, Nothing}=nothing,
     order::Union{Int, Nothing}=nothing,
+    n_control_points::Union{Int, Nothing}=nothing,
+    d_smooth::Union{Int, Nothing}=nothing,
+    λ::Union{Int, Nothing}=nothing,
     minimum_K::Int=3,
     consecutive::Int=3,
     if_print::Bool=false
@@ -260,7 +314,10 @@ function select_K_weak(
         method,
         testing_function;
         m=m,
-        order=order
+        order=order,
+        n_control_points=n_control_points,
+        d_smooth=d_smooth,
+        λ=λ
     )
 
     small_count = 0
@@ -327,9 +384,23 @@ function select_T_weak(
     m,
     m_min::Int = -6,
     m_max::Int = 6,
-    order::Int
+    order::Int,
+    n_control_points::Union{Int, Nothing}=nothing,
+    d_smooth::Union{Int, Nothing}=nothing,
+    λ::Union{Int, Nothing}=nothing
 )
-    Y, W1, W2, W3, W4, W5, W6 = get_weak_blocks(I_data, t, K, method, testing_function; m=m, order=order)
+    Y, W1, W2, W3, W4, W5, W6 = get_weak_blocks(
+        I_data,
+        t,
+        K,
+        method,
+        testing_function;
+        m=m,
+        order=order,
+        n_control_points=n_control_points,
+        d_smooth=d_smooth,
+        λ=λ
+    )
 
     s = [
         norm(Y),
@@ -367,99 +438,6 @@ function select_T_weak(
 end
 
 
-struct RootRecord
-    index::Int
-
-    # HC
-    hc_root::Vector{Float64}
-    hc_rss::Float64
-
-    # clipping information
-    clipped::Bool
-    clipped_root::Vector{Float64}
-
-    # LS stage
-    ls_success::Bool
-    ls_root::Union{Vector{Float64}, Nothing}
-    ls_rss::Union{Float64, Nothing}
-    ls_iterations::Union{Int, Nothing}
-
-    # if LS failed
-    error_message::Union{String, Nothing}
-end
-
-
-function RootRecord(;
-    index,
-    hc_root,
-    hc_rss,
-    clipped,
-    clipped_root,
-    ls_success,
-    ls_root=nothing,
-    ls_rss=nothing,
-    ls_iterations=nothing,
-    error_message=nothing
-)
-    return RootRecord(
-        index,
-        hc_root,
-        hc_rss,
-        clipped,
-        clipped_root,
-        ls_success,
-        ls_root,
-        ls_rss,
-        ls_iterations,
-        error_message
-    )
-end
-
-
-function print_root_info(r::RootRecord)
-
-    println("======================================")
-    println("Root #$(r.index)")
-    println("======================================")
-
-    println("HC result:")
-    println("  params = ", r.hc_root)
-    println("  RSS    = ", r.hc_rss)
-
-    println()
-
-    println("Clipping:")
-    println("  happened = ", r.clipped)
-
-    if r.clipped
-        println("  before = ", r.hc_root)
-        println("  after  = ", r.clipped_root)
-    end
-
-    println()
-
-    println("LS result:")
-    println("  success = ", r.ls_success)
-
-    if r.ls_success
-        println("  params = ", r.ls_root)
-        println("  RSS    = ", r.ls_rss)
-        println("  iterations = ", r.ls_iterations)
-
-        println()
-
-        println("Improvement:")
-        println("  ΔRSS = ", r.hc_rss - r.ls_rss)
-
-    else
-        println("  FAILED")
-        println("  error = ", r.error_message)
-    end
-
-    println()
-end
-
-
 function HC_LS_weak(
     t::Vector{Float64},
     I_data::Vector{Float64},
@@ -471,6 +449,9 @@ function HC_LS_weak(
     if_print=true,
     m=10,
     order=3,
+    n_control_points=max(5, round(Int, 0.3 * length(t))),
+    d_smooth::Union{Int, Nothing}=2,
+    λ::Union{Int, Nothing}=100,
     maximum_K::Int=length(t), # N datapoints -> N dimentional vector space
     threshold::Float64=1e-2,
     print_root_record::Bool=true,
@@ -491,12 +472,12 @@ function HC_LS_weak(
 
     time_start = time()
     if K === nothing
-        K = select_K_weak(I_data, t, method, testing_function, maximum_K, threshold; order=order)
+        K = select_K_weak(I_data, t, method, testing_function, maximum_K, threshold; order=order, n_control_points=n_control_points, d_smooth=d_smooth, λ=λ)
     end
 
     # Since selecting T requires K, if T >= 1, K selected before is still valid for rescaled blocks
     # However if T < 1, blocks can be larger than threshold
-    T, _ = select_T_weak(I_data, t, K, method, testing_function; m=m, order=order)
+    T, _ = select_T_weak(I_data, t, K, method, testing_function; m=m, order=order, n_control_points=n_control_points, d_smooth=d_smooth, λ=λ)
 
     if T < 1
         @warn(
@@ -510,7 +491,10 @@ function HC_LS_weak(
             method,
             testing_function;
             m=m,
-            order=order
+            order=order,
+            n_control_points=n_control_points,
+            d_smooth=d_smooth,
+            λ=λ
         )
 
         T, _ = select_T_weak(
@@ -520,7 +504,10 @@ function HC_LS_weak(
             method,
             testing_function;
             m=m,
-            order=order
+            order=order,
+            n_control_points=n_control_points,
+            d_smooth=d_smooth,
+            λ=λ
         )
     end
 
@@ -534,11 +521,24 @@ function HC_LS_weak(
 
     time_start = time()
     t_scaled = t ./ T
-    Y, W1, W2, W3, W4, W5, W6 = get_weak_blocks(I_data, t_scaled, K, method, testing_function; m=m, order=order, plot_Ihat=plot_Ihat)
+    Y, W1, W2, W3, W4, W5, W6 = get_weak_blocks(
+        I_data,
+        t,
+        K,
+        method,
+        testing_function;
+        m=m,
+        order=order,
+        n_control_points=n_control_points,
+        d_smooth=d_smooth,
+        λ=λ,
+        plot_Ihat=plot_Ihat
+    )
+
     times["get weak blocks"] = time() - time_start
 
     time_start = time()
-    B = get_blocks(I_data, t_scaled, method)
+    B = get_blocks(I_data, t_scaled, method, order=order, n_control_points=n_control_points, d_smooth=d_smooth, λ=λ)
     times["get blocks"] = time() - time_start
 
     time_start = time()
@@ -583,6 +583,7 @@ function HC_LS_weak(
 
         # Make sure the starting point is inside the LS bounds
         clipped_root = min.(max.(hc_root, lb_scaled), ub_scaled)
+        clipped_rss = Logic.get_RSS(I_data, Logic.I_hat(clipped_root, B..., t_scaled))
 
         clipped = clipped_root != hc_root
 
@@ -607,6 +608,7 @@ function HC_LS_weak(
 
                 clipped = clipped,
                 clipped_root = clipped_root,
+                clipped_rss = clipped_rss,
 
                 ls_success = true,
                 ls_root = ls_root,
@@ -630,6 +632,7 @@ function HC_LS_weak(
 
                 clipped = clipped,
                 clipped_root = clipped_root,
+                clipped_rss = clipped_rss,
 
                 ls_success = false,
                 ls_root = nothing,
@@ -710,38 +713,6 @@ function HC_LS_weak(
             print_root_info(record)
         end
     end
-
-#        println("\nALL real results -- #", length(real_results))
-#        for r in real_results
-#            printstyled("------------\n", color = :blue)
-#            r_physical = Logic.to_physical(r, T)
-#            println("RSS_Ihat_Idata ", Logic.get_RSS(I_data, Logic.I_hat(r, B..., t_scaled)))
-#
-#            if true_vals !== nothing
-#                println("parameter error ", Logic.get_param_error(r_physical, true_vals))
-#            end
-#
-#            printstyled("------------\n", color = :blue)
-#        end
-#
-#        println("\nALL final results -- #", length(final_results_scaled))
-#        for (ind, r) in enumerate(final_results_scaled)
-#            printstyled("------------\n", color = :blue)
-#
-#            if r == best_result_scaled
-#                printstyled("best result!\n", color=:yellow)
-#            end
-#            r_physical = Logic.to_physical(r, T)
-#
-#            iter_r = iteration_count_list[ind]
-#            println("model evaluations = ", iter_r)
-#            println("RSS_Ihat_Idata ", Logic.get_RSS(I_data, Logic.I_hat(r, B..., t_scaled)))
-#
-#            if true_vals !== nothing
-#                println("parameter error ", Logic.get_param_error(r_physical, true_vals))
-#            end
-#            printstyled("------------\n", color = :blue)
-#        end
 
 
     if compare_LS

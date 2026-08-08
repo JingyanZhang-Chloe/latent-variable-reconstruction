@@ -20,7 +20,7 @@ using Printf
 const variables = [αT, σT, γT, S0, E0]
 
 function main()
-    t = collect(0.0:10.0:1000.0)
+    t = collect(0.0:20.0:1000.0)
     S, E, I, R = Logic.simulate_seir(t)
     noise = 0.01
     println("Noise level: $noise")
@@ -30,7 +30,10 @@ function main()
     results = Logic.HC_LS(t, I_data, variables, "S")
     Logic.print_HC_LS(results)
 
-    HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U, compare_LS=true, profiling=true, perturb=0.50)
+    @profile HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U, compare_LS=true, profiling=true, perturb=0.50)
+
+    ProfileView.view()
+
     println()
 
 #    t_scaled = t ./ 100
