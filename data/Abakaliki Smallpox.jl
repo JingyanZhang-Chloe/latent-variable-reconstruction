@@ -34,9 +34,9 @@ function main()
     # rash_days[i] is the date of onset of rash for case i
     rash_days = Int[
         0, 13, 20, 22, 25, 25, 25, 26,
-        30, 35, 28, 40, 40, 42, 42, 47,
-        50, 51, 55, 55, 56, 56, 57, 58,
-        60, 60, 61, 63, 66, 66, 71, 76
+        28, 30, 35, 40, 40, 42, 42, 47,
+        50, 51, 55, 55, 56, 57, 58, 60,
+        60, 61, 66, 66, 71, 76
     ]
 
     # We have in total 76 days
@@ -53,7 +53,9 @@ function main()
     μ_rash_to_removal = 16.0
 
     # Each day, how many residence are in infectious mode
-    I_data = Float64[
+    N = 120.0
+
+    I_data_row = Float64[
         count(
             r -> r - μ_fever_to_rash <= day < r + μ_rash_to_removal,
             rash_days
@@ -61,10 +63,20 @@ function main()
         for day in t
     ]
 
-    results = Logic.HC_LS(t, I_data, variables, "S", true_vals=nothing)
-    Logic.print_HC_LS(results)
+    I_data = I_data_row ./ N
 
-    HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U; true_vals=nothing, threshold=0.2)
+#    results = Logic.HC_LS(t, I_data, variables, "S", true_vals=nothing)
+#    Logic.print_HC_LS(results)
+
+    # we have
+    # n_control_points=max(5, round(Int, 0.3 * length(t))),
+    # d_smooth::Union{Int, Nothing}=4,
+    # λ::Union{Int, Nothing}=10,
+    for method in ["QSpline_GK", "CSpline_GK", "Akima_GK", "BSpline_GK", "BSplineApprox", "RegularizationSmooth", "PCHIP"]
+        println("method: ", method)
+        HC_LS_weak(t, I_data, variables, method, :chebyshev_U; true_vals=nothing, threshold=0.01, order=4)
+    end
+    println()
 end
 
 main()

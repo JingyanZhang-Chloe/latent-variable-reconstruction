@@ -49,8 +49,14 @@ function main()
     # K=4
 #    HC_LS_weak(t, I_data, variables, "S", :chebyshev_U; true_vals=true_vals)
 #    HC_LS_weak(t, I_data, variables, "S_improved", :chebyshev_U; true_vals=true_vals)
-    HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U; true_vals=true_vals, threshold=0.2, perturb=0.5, compare_LS=true, plot_Ihat=true)
+#    HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U; true_vals=true_vals, threshold=0.2, perturb=0.5, compare_LS=true, plot_Ihat=true)
 #    HC_LS_weak(t, I_data, variables, "BSpline_GK", :chebyshev_U; order=4, true_vals=true_vals, threshold=0.2, compare_LS=true)
+
+
+    for method in ["QSpline_GK", "CSpline_GK", "Akima_GK", "BSpline_GK", "BSplineApprox", "RegularizationSmooth", "PCHIP"]
+        println("method: ", method)
+        HC_LS_weak(t, I_data, variables, method, :chebyshev_U; true_vals=true_vals, threshold=0.01, order=4)
+    end
     println()
 end
 

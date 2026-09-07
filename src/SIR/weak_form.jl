@@ -228,6 +228,23 @@ function get_blocks(
 
         return I0, B1, B2, B3
 
+    elseif method in ["BSpline_GK"]
+        Ihat = BSplineKit.interpolate(
+                t,
+                I_data,
+                BSplineOrder(order)
+            )
+
+        Ispline = BSplineKit.Splines.spline(Ihat)
+
+        IntIhat = BSplineKit.Splines.integral(Ispline)
+
+        B1 = [IntIhat(x) - IntIhat(t0) for x in t]
+        B2 = cumulative_quadgk(s -> Ihat(s)^2, t)
+        B3 = 0.5 .* (B1.^2)
+
+        return I0, B1, B2, B3
+
     elseif method in ["BSplineApprox", "RegularizationSmooth", "PCHIP"]
         Ihat = build_I_interpolant(t, I_data, method, order=order, n_control_points=n_control_points, d_smooth=d_smooth, λ=λ)
 
@@ -564,8 +581,8 @@ function HC_LS_weak(
     m=10,
     order=3,
     n_control_points=max(5, round(Int, 0.3 * length(t))),
-    d_smooth::Union{Int, Nothing}=2,
-    λ::Union{Int, Nothing}=100,
+    d_smooth::Union{Int, Nothing}=4,
+    λ::Union{Int, Nothing}=10,
     maximum_K::Int=length(t), # N datapoints -> N dimentional vector space
     threshold::Float64=1e-2,
     print_root_record::Bool=true,
@@ -603,8 +620,9 @@ function HC_LS_weak(
             I_data,
             t ./ T,
             method,
-            testing_function;
-            m=m,
+            testing_function,
+            maximum_K,
+            threshold;
             order=order,
             n_control_points=n_control_points,
             d_smooth=d_smooth,
@@ -628,7 +646,9 @@ function HC_LS_weak(
     if T < 1
         # If T < 1 again
         # Though it should not happen that T < 1 ...
-        error("method needs update because T always < 1")
+        # error("method needs update because T always < 1")
+        T = 1.0
+        # We avoid time rescaling
     end
 
     times["select K T"] = time() - time_start
@@ -638,7 +658,7 @@ function HC_LS_weak(
 
     Y, W1, W2, W3 = get_weak_blocks(
         I_data,
-        t,
+        t_scaled,
         K,
         method,
         testing_function;
@@ -875,5 +895,5 @@ function HC_LS_weak(
         end
     end
 
-    return best_result, RSS_Ihat_Idata, parameter_err
+    return best_result, RSS_Ihat_Idata
 end

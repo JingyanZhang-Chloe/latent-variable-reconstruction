@@ -77,11 +77,16 @@ function main()
     raggett = [7.42, 3.39, 254 / 350]
     """
 
-    results = Logic.HC_LS(t, I_data, variables, "S", true_vals=true_vals)
-    Logic.print_HC_LS(results)
+#    results = Logic.HC_LS(t, I_data, variables, "S", true_vals=true_vals)
+#    Logic.print_HC_LS(results)
 
-    HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U; true_vals=true_vals, threshold=0.2, compare_LS=true)
+    # HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U; true_vals=true_vals, threshold=0.2, compare_LS=true)
+    # HC_LS_weak(t, I_data, variables, "PCHIP", :chebyshev_U; order=4, true_vals=true_vals, n_control_points = 7, threshold=0.5, perturb=0.5, compare_LS=false, plot_Ihat=true)
 
+    for method in ["QSpline_GK", "CSpline_GK", "Akima_GK", "BSpline_GK", "BSplineApprox", "RegularizationSmooth", "PCHIP"]
+        println("method: ", method)
+        HC_LS_weak(t, I_data, variables, method, :chebyshev_U; true_vals=true_vals, threshold=0.01, order=4)
+    end
     println()
 end
 

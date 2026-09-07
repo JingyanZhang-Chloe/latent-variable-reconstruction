@@ -68,49 +68,32 @@ function main()
 
     S, I, R = Logic.simulate_sir(t)
 
-    noise = 0.01
-    println("Noise level: $noise")
-    I_data = I .+ noise .* I .* randn(length(I))
+    for noise in [0, 0.001, 0.005, 0.01]
 
-    # Optional: avoid negative infected values after adding noise
-    I_data = max.(I_data, 0.0)
+        println()
+        println()
+        println("Noise level: $noise")
+        I_data = I .+ noise .* I .* randn(length(I))
 
-#    results = Logic.HC_LS(t, I_data, variables, "S")
-#    Logic.print_HC_LS(results)
-#
-     # K = 60
-#    # before time rescaling
-#    _HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
-#    # after time rescaling
-#
-#    HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
-#    println()
+        # Optional: avoid negative infected values after adding noise
+        I_data = max.(I_data, 0.0)
 
-
-#    HC_LS_weak(t, I_data, variables, "S_improved", :sin; K=K)
-#    HC_LS_weak(t, I_data, variables, "S_improved", :bump; K=K)
-#    HC_LS_weak(t, I_data, variables, "S_improved", :hartley; K=K)
-#    HC_LS_weak(t, I_data, variables, "S_improved", :polynomial; K=K)
-#    HC_LS_weak(t, I_data, variables, "S_improved", :chebyshev_U; K=K)
-
-    HC_LS_weak(t, I_data, variables, "CSpline_GK", :chebyshev_U, plot_Ihat=true)
+        HC_LS_weak(t, I_data, variables, "RegularizationSmooth", :chebyshev_U, order = 4, λ=10, plot_Ihat=false, compare_LS=false, profiling=false)
+    end
 
 #    for degree in 3:8
 #        HC_LS_weak(t, I_data, variables, "BSpline_GK", :sin; K=K, degree=degree)
 #        HC_LS_weak(t, I_data, variables, "BSpline_GK", :chebyshev_U; K=K, degree=degree)
 #    end
 
-#    _HC_LS_weak(t, I_data, variables, "S_improved"; K=K)
 
 #    HC_LS_weak(t, I_data, variables, "QSpline_GK"; K=K)
-#    _HC_LS_weak(t, I_data, variables, "QSpline_GK"; K=K)
+
 #    # results = stability_test(n_trials=20, K=8, noise=0.01)
 #
 #    HC_LS_weak(t, I_data, variables, "CSpline_GK"; K=K)
-#    _HC_LS_weak(t, I_data, variables, "CSpline_GK"; K=K)
 #
 #    HC_LS_weak(t, I_data, variables, "Akima_GK"; K=K)
-#    _HC_LS_weak(t, I_data, variables, "Akima_GK"; K=K)
 
     println()
 end
