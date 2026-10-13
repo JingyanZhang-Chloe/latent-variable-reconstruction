@@ -97,6 +97,6 @@ This repository demonstrates that **weak-form integral elimination** offers a hi
 
 Based on our extensive benchmarking and real-world validations, the Homotopy Continuation-Least Squares (HC-LS) framework achieves the following:
 * **Robust Global Recovery:** Accurately recovers latent variables and parameters without requiring prior initial guesses, overcoming the local minima traps of standard optimization.
-* **Noise Resilience:** Achieves near machine-precision accuracy in low-noise regimes and maintains robust estimates under moderate-to-high noise ($1\% - 20\%$) by leveraging regression B-splines and regularized smoothing as variational filters.
+* **Noise Resilience:** Achieves near machine-precision accuracy in low-noise regimes and maintains robust estimates under moderate-to-high noise (1% - 20%) by leveraging regression B-splines and regularized smoothing as variational filters.
 * **Automated Stability:** Dynamically auto-tunes the system size ($K$) and time-rescaling factor ($T$) to prevent matrix ill-conditioning, ensuring mathematical stability across diverse epidemic regimes.
 * **Real-World Validation:** Successfully reconstructs some historical epidemic dynamics, including the 1967 Tristan da Cunha common cold outbreak and the 1665 Eyam plague, effectively handling sparse and noisy reporting data.
